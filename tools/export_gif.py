@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """tools/render_frames.js でフレームを書き出し、プレビュー GIF と一覧画像を作る。
 
-  python3 tools/export_gif.py [--out docs/preview] [--scale 4] [--fps 5] [scenario ...]
+  python3 tools/export_gif.py [--out docs/preview] [--scale 2] [--fps 5] [scenario ...]
 
 出力:
   <out>/<scenario>.gif        5fps のループ GIF
@@ -23,9 +23,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("scenarios", nargs="*")
     ap.add_argument("--out", type=Path, default=ROOT / "docs/preview")
-    ap.add_argument("--scale", type=int, default=4)
+    ap.add_argument("--scale", type=int, default=2)
     ap.add_argument("--fps", type=float, default=5)
-    ap.add_argument("--sheet-scale", type=int, default=2)
+    ap.add_argument("--sheet-scale", type=int, default=1)
     a = ap.parse_args()
 
     a.out.mkdir(parents=True, exist_ok=True)

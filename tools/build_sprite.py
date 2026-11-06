@@ -3,29 +3,30 @@
 
 入力:
   assets/source/koudaioh.jpg           目が点灯している絵 (本体の基準)
-  assets/source/koudaioh_eyes_off.jpg  同じ絵で目を消灯したもの (顔の素の画素と目の形の判定に使う)
+  assets/source/koudaioh_eyes_off.jpg  同じ絵で目を消灯したもの (顔の素の画素と目の範囲の判定に使う)
 
 出力: web/sprite_data.js
-  - body  : ロボット本体 (96x128 の文字グリッド。手で直接ドット修正してよい)
+  - body  : ロボット本体 (192x256 の文字グリッド。手で直接ドット修正してよい)
   - stand : 椅子。元画像からは切り出さず楕円で描き直す (本体が離れても欠けないように)
   - anchors: 目・胸・額マーク・足元など、エフェクトの基準座標
 
 文字の意味 (body / stand 共通):
-  '.'      透明
-  '0'-'6'  グレー系パレット (暗 -> 明)
-  'o'      アウトライン
-  'F' 'E' 'd'  目 (芯 / 赤 / 暗赤)。描画時に状態ごとの色へ置き換わる
-  'm'      額のセンサーマーク。描画時に状態ごとの色へ置き換わる
+  '.'          透明
+  '0'-'9'      グレー系パレット (暗 -> 明)
+  'o'          アウトライン
+  'F' 'E' 'D' 'd'  目 (芯 / 明赤 / 赤 / 暗赤)。描画時に状態ごとの色へ置き換わる
+  'm'          額のセンサーマーク。描画時に状態ごとの色へ置き換わる
 
 処理の流れ:
-  1. 8x8 ブロック中央値で 96x128 に縮小
+  1. 元画像のドット格子 (4px) ごとの中央値で 192x256 に取り込む (= 元絵の実解像度)
   2. 背景 (外周とつながった黒) と元の椅子を除去
-  3. 顔は消灯版の画素を使い、目は手打ちのスタンプを置く
-  4. 左右対称化 (左右の色を平均して鏡映)。軸をキャンバス中央へ
-  5. k-means で 7 階調に減色、孤立点除去、額マークの描き直し、1px アウトライン
+  3. 顔は消灯版の画素を使う。点灯版で赤く、消灯版で暗い画素 (バイザーの中) を目とする
+     -> 目の外の装甲への照り返しは入らない
+  4. 左右対称化: 向かって左半分を右へ鏡映し、軸をキャンバス中央へ寄せる
+  5. k-means で減色、1px アウトライン
 
 使い方:
-  python3 tools/build_sprite.py [--sym avg|left|right]
+  python3 tools/build_sprite.py
 """
 from __future__ import annotations
 
@@ -37,14 +38,23 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-W, H = 96, 128          # 論理解像度 (元画像 765x1024 のほぼ 1/8)
-N_GRAYS = 7             # 本体のグレー階調数
+W, H = 192, 256         # 論理解像度 = 元画像 (765x1024) のドット格子 4px ぶん
+CELL = 4                # 元画像の 1 ドット
+PHASE = (0, 1)          # ドット格子の位相 (x, y)。4x4 ブロック内の分散が最小になるずれ
+N_GRAYS = 10            # 本体のグレー階調数
 BG_LUM = 30             # これ未満で外周とつながった画素は背景
-FEET_CUT_ROW = 116      # 本体として残す最下行 (靴底)
-MIN_PART = 30           # これより小さい連結成分は切り抜きの残骸として捨てる
-AXIS = 44               # 元絵での左右対称軸の列 (シルエットの鏡映 IoU が最大になる列)
-SHIFT = 3               # 対称化後、軸をキャンバス中央 (列 47) へ寄せる量
-FACE_BOX = (30, 44, 58, 66)   # 消灯版の画素を使う範囲 x0, y0, x1, y1
+FEET_CUT_ROW = 233      # 本体として残す最下行 (靴底)
+MIN_PART = 120          # これより小さい連結成分は切り抜きの残骸として捨てる
+# 左右対称の軸: x と MIRROR - x を対にする。
+# 元絵は輪郭の軸が列 88、額マーク・胸の線など内側の模様の軸が列 87 付近とずれている。
+# 顔の模様を崩さないことを優先して列 87 を軸にする (額マークの縦線 3px がそのまま残る)
+MIRROR = 174
+HALF = MIRROR // 2      # 左半分の最後の列 (= 軸の列 87)
+SHIFT = 8               # 対称化後、軸をキャンバス中央 (列 95) へ寄せる量
+
+FACE_BOX = (60, 88, 117, 133)   # 消灯版の画素を使う範囲 x0, y0, x1, y1
+EYE_BOX = (64, 104, 92, 128)    # 目を探す範囲
+MARK_BOX = (78, 74, 88, 104)    # 額マークを探す範囲 (左半分だけ。鏡映される)
 
 ROOT = Path(__file__).resolve().parent.parent
 N4 = ((1, 0), (-1, 0), (0, 1), (0, -1))
@@ -52,13 +62,20 @@ N8 = N4 + ((1, 1), (1, -1), (-1, 1), (-1, -1))
 
 
 # --------------------------------------------------------------------------
-# 1. 縮小と背景除去
+# 1. 取り込みと背景除去
 # --------------------------------------------------------------------------
-def load_small(src: Path) -> np.ndarray:
-    """8x8 ブロックごとの中央値で縮小する。平均 (BOX) より輪郭が立ち、ドット絵らしくなる。"""
-    im = Image.open(src).convert("RGB").resize((W * 8, H * 8), Image.NEAREST)
-    a = np.asarray(im).astype(np.int32)
-    blocks = a.reshape(H, 8, W, 8, 3).transpose(0, 2, 1, 3, 4).reshape(H, W, 64, 3)
+def load_native(src: Path) -> np.ndarray:
+    """元画像を 4x4 ドットごとの中央値で 192x256 に取り込む。"""
+    a = np.asarray(Image.open(src).convert("RGB")).astype(np.int32)
+    ph, pw = H * CELL + CELL, W * CELL + CELL
+    pad = np.empty((ph, pw, 3), np.int32)
+    h, w = min(a.shape[0], ph), min(a.shape[1], pw)
+    pad[:h, :w] = a[:h, :w]
+    pad[:h, w:] = a[:h, w - 1:w]
+    pad[h:] = pad[h - 1:h]
+    px, py = PHASE
+    b = pad[py:py + H * CELL, px:px + W * CELL]
+    blocks = b.reshape(H, CELL, W, CELL, 3).transpose(0, 2, 1, 3, 4).reshape(H, W, CELL * CELL, 3)
     return np.median(blocks, axis=2).astype(np.int32)
 
 
@@ -87,21 +104,21 @@ def background_mask(rgb: np.ndarray) -> np.ndarray:
 # --------------------------------------------------------------------------
 # 2. 本体と元の椅子の分離
 #    元画像の椅子は靴と重なっているので、行・列・明るさで切り分ける。
-#    (座標は 96x128 グリッド上で目視確認したもの。対称化前の座標)
-#      左の靴: x=18..25 / y=107..115   脛の先: x=25..31 で y=113 まで
+#    (対称化前の座標。左半分だけ効けばよい)
+#      左の靴: x=36..51 / y=214..231   脛の先: x=50..63 で y=227 まで
 # --------------------------------------------------------------------------
 def is_original_stand(x: int, y: int, lum: float) -> bool:
     if y > FEET_CUT_ROW:
         return True
-    if y < 108:
+    if y < 216:
         return False
-    if x <= 17 or x >= 72:          # 座面の左右端
+    if x <= 35 or x >= 144:         # 座面の左右端
         return True
-    if 32 <= x <= 56:               # 両脚の間 (座面の奥側が見えている)
-        return y >= 111
-    if x <= 19 or x >= 70:          # 端と靴の境目: 明るければ座面
+    if 64 <= x <= 113:              # 両脚の間 (座面の奥側が見えている)
+        return y >= 222
+    if x <= 39 or x >= 140:         # 端と靴の境目: 明るければ座面
         return lum > 140
-    return y >= 114 and lum > 140   # 靴まわり: 明るい画素は座面
+    return y >= 228 and lum > 140   # 靴まわり: 明るい画素は座面
 
 
 def keep_large_parts(mask: np.ndarray) -> np.ndarray:
@@ -122,78 +139,36 @@ def keep_large_parts(mask: np.ndarray) -> np.ndarray:
 # --------------------------------------------------------------------------
 # 3. 目と額マーク
 # --------------------------------------------------------------------------
-# 目は 1/8 縮小だと芯と赤が交互に並んでギザギザになるので、元絵 (点灯版) の向かって左の目を
-# 8x8 セルごとの赤み (r - max(g,b)) で読み取り、手で整えたものを置く。右目は対称化で鏡映される。
-#   赤み >= 145: 'F'   90..145: 'E'   55..90 かつ暗い: 'd'   (明るいセルは照り返しなので目に含めない)
-#   輝度 < 35 のセルは '0' (バイザー下の黒い楔)
-# 対称化前の座標で x=35..44, y=56..61。外側が高く、上辺が内側へ下がる。
-#   'F''E''d' 目 (芯/赤/暗赤)   '0' バイザーの黒   '.' 消灯版の画素のまま
-EYE_ORIGIN = (35, 56)
-EYE_STAMP = [
-    ".EE.......",
-    ".EFFEd....",
-    ".EFFFFEd00",
-    ".dEFFFd000",
-    "......0000",
-    ".......000",
-]
-
-# 手修正 (対称化前の座標、左半分のみ)。縮小で途切れた線が孤立した黒点に見える箇所など。
-TOUCHUP = {
-    # 頬の下の斜め線の末端が 2x2 の黒い塊になり「鼻の穴」に見えるので暗いグレーに
-    (37, 62): "1", (38, 62): "1", (37, 63): "1", (38, 63): "1",
-}
+def eye_role(lit: np.ndarray, unlit: np.ndarray) -> str | None:
+    """点灯版で赤く、消灯版で暗い (= バイザーのスリット内) 画素だけを目にする。
+    消灯版で明るい画素は装甲への照り返しなので目に含めない。"""
+    if unlit.mean() >= 90:
+        return None
+    r, g, b = (int(v) for v in lit)
+    red = r - max(g, b)
+    if red >= 170:
+        return "F"
+    if red >= 120:
+        return "E"
+    if red >= 70:
+        return "D"
+    if red >= 35:
+        return "d"
+    return None
 
 
-# 額のセンサーマーク (照準風の十字＋円)。1/8 縮小では潰れるので描き直す。
-# '#' がマーク、'+' は下地を塗り直す。中心列が AXIS に来るように置く。
-MARK_ORIGIN = (AXIS - 3, 38)
-MARK_STAMP = [
-    "+++#+++",
-    "+++#+++",
-    "++###++",
-    "+#+++#+",
-    "##+#+##",
-    "+#+++#+",
-    "++###++",
-    "+++#+++",
-    "+++#+++",
-]
+MARK_LUM = 75           # 額マーク: これより暗い画素をマークとする
 
 
 # --------------------------------------------------------------------------
-# 4. 左右対称化
+# 4. 左右対称化 (向かって左半分を右へ鏡映)
 # --------------------------------------------------------------------------
-def symmetrize(rgb: np.ndarray, mask: np.ndarray, roles: dict, mode: str):
-    """左半分 (x <= AXIS) を基準に右へ鏡映する。
-    mode='avg'  : 左右とも本体の画素は色を平均する (片側だけの陰影が平らにならない)
-    mode='left' : 左半分をそのまま鏡映
-    mode='right': 右半分を左へ鏡映してから同様に扱う"""
-    rgb = rgb.copy()
-    mask = mask.copy()
-    if mode == "right":
-        for x in range(0, AXIS):
-            xm = 2 * AXIS - x
-            rgb[:, x] = rgb[:, xm]
-            mask[:, x] = mask[:, xm]
-        roles = {(2 * AXIS - x if x > AXIS else x, y): r for (x, y), r in roles.items() if x >= AXIS}
-    elif mode == "avg":
-        for x in range(0, AXIS):
-            xm = 2 * AXIS - x
-            both = mask[:, x] & mask[:, xm]
-            rgb[both, x] = (rgb[both, x] + rgb[both, xm]) // 2
-    for x in range(AXIS + 1, W):
-        xm = 2 * AXIS - x
-        if xm >= 0:
-            rgb[:, x] = rgb[:, xm]
-            mask[:, x] = mask[:, xm]
-        else:
-            mask[:, x] = False
-    left_roles = {(x, y): r for (x, y), r in roles.items() if x <= AXIS}
-    roles = dict(left_roles)
-    for (x, y), r in left_roles.items():
-        roles[(2 * AXIS - x, y)] = r
-    return rgb, mask, roles
+def mirror_left(arr: np.ndarray, fill) -> np.ndarray:
+    out = arr.copy()
+    for x in range(HALF + 1, W):
+        xm = MIRROR - x
+        out[:, x] = arr[:, xm] if xm >= 0 else fill
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -213,44 +188,26 @@ def kmeans_palette(colors: np.ndarray, k: int, iters: int = 30) -> np.ndarray:
     return np.clip(np.round(centers), 0, 255).astype(int)
 
 
-def nearest(pal: np.ndarray, px: np.ndarray) -> int:
-    return int(((pal - px) ** 2).sum(axis=1).argmin())
-
-
-def despeckle(grid: list[list[str]]) -> None:
-    """周囲 4 近傍と 1 つも同じ色を持たず、3 つ以上が同じ色に囲まれた孤立点を潰す。"""
-    src = [row[:] for row in grid]
-    for y in range(1, H - 1):
-        for x in range(1, W - 1):
-            c = src[y][x]
-            if not c.isdigit():
-                continue
-            ns = [src[y + dy][x + dx] for dx, dy in N4]
-            if c in ns:
-                continue
-            for cand in sorted(set(ns)):
-                if cand.isdigit() and ns.count(cand) >= 3:
-                    grid[y][x] = cand
-                    break
-
-
-def mirror_grid(grid: list[list[str]]) -> None:
-    for y in range(H):
-        for x in range(AXIS + 1, W):
-            xm = 2 * AXIS - x
-            grid[y][x] = grid[y][xm] if xm >= 0 else "."
+def quantize(rgb: np.ndarray, pal: np.ndarray) -> np.ndarray:
+    d = ((rgb[:, :, None, :] - pal[None, None]) ** 2).sum(axis=3)
+    return d.argmin(axis=2)
 
 
 # --------------------------------------------------------------------------
-# 6. 椅子 (描き直し)。最終座標 (中央寄せ後) で描く。中心列 = AXIS + SHIFT = 47
+# 6. 椅子 (描き直し)。最終座標 (中央寄せ後) で、本体と同じ軸で左右対称に描く
 # --------------------------------------------------------------------------
-STAND = dict(cx=47.5, cy=113.5, rx=33.5, ry=5.6, legs=((15, 18), (45, 49), (76, 79)))
+STAND = dict(cy=227.0, rx=67.0, ry=11.0, rim=6, leg=(30, 37), center_leg_w=9)
 
 
-def draw_stand() -> list[list[str]]:
-    """座面 (楕円) + リム + 脚 3 本。色は 0..6 の 7 段階で指定し、N_GRAYS に合わせて読み替える。"""
+def draw_stand(mirror: int) -> list[list[str]]:
+    """座面 (楕円) + リム + 脚 3 本。x と mirror - x が対称。
+    色は 0..6 の 7 段階で指定し、N_GRAYS に合わせて読み替える。"""
     g = [["." for _ in range(W)] for _ in range(H)]
-    cx, cy, rx, ry = STAND["cx"], STAND["cy"], STAND["rx"], STAND["ry"]
+    cx = (mirror + 1) / 2                     # 画素中心 (x + 0.5) で見た対称軸
+    cy, rx, ry, rim = STAND["cy"], STAND["rx"], STAND["ry"], STAND["rim"]
+    l0, l1 = STAND["leg"]
+    c0 = (mirror - STAND["center_leg_w"] + 1) // 2
+    legs = ((l0, l1), (c0, mirror - c0), (mirror - l1, mirror - l0))
 
     def inside(x: int, y: int) -> bool:
         return ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1.0
@@ -264,23 +221,23 @@ def draw_stand() -> list[list[str]]:
         bottom[x] = bot
         for y in rows:
             g[y][x] = "5"
-        g[top][x] = "3"                      # 奥側の縁
-        if top + 1 < bot:
-            g[top + 1][x] = "4"
-        g[bot][x] = "6"                      # 手前の縁のハイライト
-        for i, c in enumerate("321"):        # 側面 (リム)
-            g[bot + 1 + i][x] = c
-        g[bot + 4][x] = "0"
+        for i in range(2):                   # 奥側の縁
+            if top + i < bot:
+                g[top + i][x] = "3" if i == 0 else "4"
+        g[bot][x] = g[bot - 1][x] = "6"      # 手前の縁のハイライト
+        for i in range(rim):                 # 側面 (リム)
+            g[bot + 1 + i][x] = "3" if i < 2 else "2" if i < 4 else "1"
+        g[bot + rim + 1][x] = "0"
     xs = sorted(bottom)
-    for x in (xs[0], xs[-1]):                # 左右端は 1 段暗く
+    for x in (xs[0], xs[1], xs[-2], xs[-1]):  # 左右端は 1 段暗く
         for y in range(H):
             if g[y][x] in "56":
                 g[y][x] = "4"
-    for x0, x1 in STAND["legs"]:
-        y_start = min(bottom[x] for x in range(x0, x1 + 1)) + 4
+    for x0, x1 in legs:
+        y_start = min(bottom[x] for x in range(x0, x1 + 1)) + rim + 2
+        mid = (x0 + x1) / 2
         for y in range(y_start, H):
             for x in range(x0, x1 + 1):
-                mid = (x0 + x1) / 2
                 g[y][x] = "1" if x in (x0, x1) else "5" if abs(x - mid) < 1 else "4"
     lv = {str(i): str(round(i * (N_GRAYS - 1) / 6)) for i in range(7)}
     return [[lv.get(c, c) for c in row] for row in g]
@@ -289,9 +246,9 @@ def draw_stand() -> list[list[str]]:
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
-def build(src: Path, src_off: Path, out: Path, sym: str) -> None:
-    lit = load_small(src)
-    unlit = load_small(src_off)
+def build(src: Path, src_off: Path, out: Path) -> None:
+    lit = load_native(src)
+    unlit = load_native(src_off)
     bg = background_mask(lit)
     lum = lit.mean(axis=2)
 
@@ -301,41 +258,42 @@ def build(src: Path, src_off: Path, out: Path, sym: str) -> None:
             body[y, x] = not bg[y, x] and not is_original_stand(x, y, lum[y, x])
     body = keep_large_parts(body)
 
-    # 顔: 消灯版の画素 (赤の照り返しがない素の装甲) を使い、目は手打ちのスタンプを置く
+    # 顔: 消灯版の画素 (赤の照り返しがない素の装甲) を使い、目の位置に役割を付ける
     rgb = lit.copy()
     fx0, fy0, fx1, fy1 = FACE_BOX
     rgb[fy0:fy1 + 1, fx0:fx1 + 1] = unlit[fy0:fy1 + 1, fx0:fx1 + 1]
-    roles: dict[tuple[int, int], str] = {}
-    ox, oy = EYE_ORIGIN
-    for j, row in enumerate(EYE_STAMP):
-        for i, c in enumerate(row):
-            if c != ".":
-                roles[(ox + i, oy + j)] = c
+    role = np.full((H, W), "", dtype=object)
+    ex0, ey0, ex1, ey1 = EYE_BOX
+    for y in range(ey0, ey1 + 1):
+        for x in range(ex0, min(ex1, HALF) + 1):
+            if body[y, x]:
+                r = eye_role(lit[y, x], unlit[y, x])
+                if r:
+                    role[y, x] = r
+    mx0, my0, mx1, my1 = MARK_BOX
+    for y in range(my0, my1 + 1):
+        for x in range(mx0, mx1 + 1):
+            if body[y, x] and lum[y, x] < MARK_LUM:
+                role[y, x] = "m"
 
-    rgb, body, roles = symmetrize(rgb, body, roles, sym)
+    # 左右対称化 (向かって左半分を正とする)
+    rgb = mirror_left(rgb, 0)
+    body = mirror_left(body, False)
+    role = mirror_left(role, "")
 
-    gray = [rgb[y, x] for y in range(H) for x in range(W) if body[y, x] and (x, y) not in roles]
-    pal = kmeans_palette(np.array(gray), N_GRAYS)
-    grid = [[str(nearest(pal, rgb[y, x])) if body[y, x] else "." for x in range(W)] for y in range(H)]
-    for _ in range(2):
-        despeckle(grid)
-    for (x, y), r in roles.items():
-        grid[y][x] = r
-    for (x, y), c in TOUCHUP.items():
-        grid[y][x] = c
-
-    # 額マーク: 下地は軸の左を明るく、軸上を中間に
-    mx0, my0 = MARK_ORIGIN
-    for j, row in enumerate(MARK_STAMP):
-        for i, c in enumerate(row):
-            x, y = mx0 + i, my0 + j
-            if grid[y][x] != ".":
-                grid[y][x] = "m" if c == "#" else ("5" if x < AXIS else "4")
-    mirror_grid(grid)                         # despeckle の向き依存を消して厳密に対称へ
+    plain = body & (role == "")
+    pal = kmeans_palette(rgb[plain], N_GRAYS)
+    idx = quantize(rgb, pal)
+    grid = [["." for _ in range(W)] for _ in range(H)]
+    for y in range(H):
+        for x in range(W):
+            if body[y, x]:
+                grid[y][x] = role[y, x] or str(idx[y, x])
 
     # 軸をキャンバス中央へ寄せる
     grid = [["."] * SHIFT + row[: W - SHIFT] for row in grid]
-    cx = AXIS + SHIFT
+    mirror = MIRROR + 2 * SHIFT          # 最終座標で x と mirror - x が対 (= 191)
+    cx = mirror // 2                     # 中央の左側の列 (95)。エフェクトの基準
 
     # 1px アウトライン (4 近傍)。椅子やエフェクトと重なったときに輪郭が立つ
     for y in range(H):
@@ -345,30 +303,36 @@ def build(src: Path, src_off: Path, out: Path, sym: str) -> None:
             ):
                 grid[y][x] = "o"
 
-    stand = draw_stand()
+    stand = draw_stand(mirror)
 
     def box(pts):
         return [min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts)]
 
     solid = [(x, y) for y in range(H) for x in range(W) if grid[y][x] != "."]
-    eyes = [(x, y) for (x, y) in solid if grid[y][x] in "FEd"]
+    eyes = [(x, y) for (x, y) in solid if grid[y][x] in "FEDd"]
+    mark = box([(x, y) for (x, y) in solid if grid[y][x] == "m"])
     anchors = {
+        "unit": 2,                       # エフェクト寸法の基準 (1 unit = 2px)
+        "mirror": mirror,                # 左右対称: x と mirror - x が同じ
         "bbox": box(solid),
         "eyeL": box([p for p in eyes if p[0] < cx]),
         "eyeR": box([p for p in eyes if p[0] > cx]),
-        "mark": [cx, my0 + 4],
-        "head": [cx, 48],
-        "chest": [cx, 79],
-        "feet": [[21 + SHIFT, FEET_CUT_ROW], [2 * AXIS - 21 + SHIFT, FEET_CUT_ROW]],
+        "mark": [cx, (mark[1] + mark[3]) // 2],
+        "head": [cx, 96],
+        "chest": [cx, 158],
+        "feet": [[44 + SHIFT, FEET_CUT_ROW], [mirror - 44 - SHIFT, FEET_CUT_ROW]],
         "seatY": int(STAND["cy"]),
     }
 
     palette = {str(i): "#%02x%02x%02x" % tuple(int(v) for v in c) for i, c in enumerate(pal)}
     palette["o"] = "#07080d"
+    # 額マークの通常色 (元絵のマーク画素の平均)。AUTO のときは描画側で青/緑に置き換わる
+    mc = rgb[role == "m"].mean(axis=0)
+    palette["m"] = "#%02x%02x%02x" % tuple(int(round(v)) for v in mc)
 
     lines = [
         "// 生成元: tools/build_sprite.py  (body / stand の文字グリッドは手で直してもよい)",
-        "// '.'透明  '0'-'6'グレー  'o'輪郭  'F''E''d'目(芯/赤/暗赤)  'm'額マーク",
+        "// '.'透明  '0'-'9'グレー  'o'輪郭  'F''E''D''d'目(芯/明赤/赤/暗赤)  'm'額マーク (palette.m は通常色)",
         "(function (root) {",
         "  var SPRITE = {",
         f"    w: {W}, h: {H},",
@@ -398,9 +362,8 @@ def main() -> None:
     ap.add_argument("--src", type=Path, default=ROOT / "assets/source/koudaioh.jpg")
     ap.add_argument("--src-off", type=Path, default=ROOT / "assets/source/koudaioh_eyes_off.jpg")
     ap.add_argument("--out", type=Path, default=ROOT / "web/sprite_data.js")
-    ap.add_argument("--sym", choices=("avg", "left", "right"), default="avg")
     a = ap.parse_args()
-    build(a.src, a.src_off, a.out, a.sym)
+    build(a.src, a.src_off, a.out)
 
 
 if __name__ == "__main__":

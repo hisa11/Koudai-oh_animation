@@ -6,7 +6,7 @@ const SPRITE = require('../web/sprite_data.js');
 const { Animator, ACTION_LEN } = require('../web/koudaioh_anim.js');
 
 const W = SPRITE.w, H = SPRITE.h;
-const AXIS = SPRITE.anchors.head[0];        // 対称軸の列
+const MIRROR = SPRITE.anchors.mirror;       // x と MIRROR - x が左右対称の対
 
 function frameAt(state, t, opts) {
   const a = new Animator(SPRITE, Object.assign({ seed: 1, state }, opts));
@@ -30,7 +30,7 @@ test('本体と椅子は左右対称', () => {
   for (const key of ['body', 'stand']) {
     SPRITE[key].forEach((row, y) => {
       for (let x = 0; x < W; x++) {
-        const m = 2 * AXIS - x;
+        const m = MIRROR - x;
         const mirror = m >= 0 && m < W ? row[m] : '.';
         assert.strictEqual(row[x], mirror, `${key} (${x},${y})`);
       }
@@ -43,7 +43,7 @@ test('目の外 (装甲) に光が漏れない: 平時の本体画素はパレ�
     [k, [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16))]));
   for (const t of [0, 4]) {                 // 通常フレームと「パッと明るく」フレーム
     const buf = frameAt('idle', t);
-    const dy = [0, 0, -1, -1, 0][t];
+    const dy = [0, 0, -1, -1, 0][t] * SPRITE.anchors.unit;
     SPRITE.body.forEach((row, y) => {
       for (let x = 0; x < W; x++) {
         const c = row[x];
