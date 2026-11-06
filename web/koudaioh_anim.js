@@ -16,9 +16,12 @@
  * 「1 ピクセル上げる」は 1 unit 動かすこと。
  */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.KoudaiohAnim = factory();
-})(typeof self !== 'undefined' ? self : this, function () {
+  // ブラウザでは常にグローバル (window.KoudaiohAnim) に登録する。
+  // Electron などで module が定義されていても、ブラウザ側から見えなくならないように
+  var lib = factory();
+  if (typeof module === 'object' && module && module.exports) module.exports = lib;
+  if (root) root.KoudaiohAnim = lib;
+})(typeof window !== 'undefined' ? window : typeof self !== 'undefined' ? self : null, function () {
   'use strict';
 
   var STATES = ['idle', 'can_dead', 'auto', 'no_link'];

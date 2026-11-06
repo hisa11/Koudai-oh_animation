@@ -5,7 +5,8 @@
   "description": "Koudai-oh の 8bit 風ステータスアニメーション (5fps)",
   "scripts": {
     "test": "node --test",
-    "build:sprite": "python3 tools/build_sprite.py",
+    "build": "python3 tools/build_sprite.py && node tools/build_standalone.js",
+    "build:standalone": "node tools/build_standalone.js",
     "preview": "python3 tools/export_gif.py"
   },
   "license": "UNLICENSED"

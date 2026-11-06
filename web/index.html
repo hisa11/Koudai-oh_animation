@@ -76,6 +76,24 @@
 <script>
 (function () {
   'use strict';
+  // ---- 読み込み確認 --------------------------------------------------------
+  // index.html だけを開いた (アプリのプレビュー、単体コピーなど) と隣の .js が読めない。
+  // そのときは原因と対処を画面に出して止める
+  var missing = [];
+  if (typeof KOUDAIOH_SPRITE === 'undefined') missing.push('sprite_data.js');
+  if (typeof KoudaiohAnim === 'undefined') missing.push('koudaioh_anim.js');
+  if (typeof KoudaiohPlayer === 'undefined') missing.push('player.js');
+  if (missing.length) {
+    var msg = document.createElement('div');
+    msg.style.cssText = 'max-width:32em;padding:16px;color:#ffb0b0;border:1px solid #803040;border-radius:6px;background:#1a0a0e';
+    msg.innerHTML = '<b>スクリプトを読み込めませんでした: ' + missing.join(', ') + '</b><br>' +
+      'index.html と同じフォルダにある .js が読めない開き方になっています。<br>' +
+      'web フォルダごとブラウザで開くか、1 ファイル版の <code>dist/koudaioh.html</code> を開いてください。';
+    document.getElementById('stage').appendChild(msg);
+    document.getElementById('panel').style.display = 'none';
+    return;
+  }
+
   // ---- URL パラメータ ------------------------------------------------------
   //  ?state=auto      初期状態 (idle / can_dead / auto / no_link)
   //  ?present=0       椅子に誰もいない状態から始める (登場で乗る)

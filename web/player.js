@@ -85,4 +85,4 @@
   };
 
   root.KoudaiohPlayer = KoudaiohPlayer;
-})(typeof self !== 'undefined' ? self : this);
+})(typeof window !== 'undefined' ? window : self);

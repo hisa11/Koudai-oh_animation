@@ -345,9 +345,9 @@ def build(src: Path, src_off: Path, out: Path) -> None:
         *[f'      "{"".join(r)}",' for r in stand],
         "    ]",
         "  };",
-        "  if (typeof module !== 'undefined' && module.exports) module.exports = SPRITE;",
-        "  else root.KOUDAIOH_SPRITE = SPRITE;",
-        "})(typeof self !== 'undefined' ? self : this);",
+        "  if (typeof module === 'object' && module && module.exports) module.exports = SPRITE;",
+        "  if (root) root.KOUDAIOH_SPRITE = SPRITE;   // ブラウザでは常にグローバルに登録",
+        "})(typeof window !== 'undefined' ? window : typeof self !== 'undefined' ? self : null);",
         "",
     ]
     out.parent.mkdir(parents=True, exist_ok=True)

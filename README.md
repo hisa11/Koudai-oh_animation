@@ -1,15 +1,21 @@
 # Koudai-oh Animation
 
 Koudai-oh の状態を 8bit 風ドット絵アニメーション（5fps）で表示する。
-ブラウザで `web/index.html` を開けば動く。ビルドもサーバも不要。
+ブラウザで開けば動く。ビルドもサーバも不要。
+
+- `dist/koudaioh.html` … 1 ファイル版。これ 1 つをどこに置いても動く（ロボットへのコピー、アプリのプレビューなど）
+- `web/index.html` … 開発用。同じフォルダの `.js` を読み込むので、`web/` フォルダごと開く
 
 ![demo](docs/preview/demo.gif)
 
 ## 動かし方
 
 ```
-web/index.html をブラウザで開く（file:// のままでよい）
+dist/koudaioh.html をブラウザで開く（file:// のままでよい）
 ```
+
+`KoudaiohAnim is not defined` と出る場合は、`web/index.html` を単体で開いていて隣の `.js` が読めていない。
+`dist/koudaioh.html` を使うか、`web/` フォルダごと開く。
 
 | キー | ボタン | 内容 |
 |---|---|---|
@@ -100,11 +106,13 @@ const raster = anim.step();      // 1 コマ描いて進める。raster.data は
 ## ファイル
 
 ```
+dist/koudaioh.html      1 ファイル版（生成物。web/ の HTML と .js をまとめたもの）
 web/index.html          プレーヤー（操作パネル、キー操作、URL パラメータ、WebSocket）
 web/koudaioh_anim.js    アニメーション本体。DOM 非依存（ブラウザでも Node でも同じ絵が出る）
 web/player.js           一定 fps で回して canvas に整数倍表示する
 web/sprite_data.js      スプライト（生成物。文字グリッドなので手でドット修正してもよい）
 tools/build_sprite.py   元画像 → sprite_data.js
+tools/build_standalone.js  web/ → dist/koudaioh.html
 tools/render_frames.js  ブラウザなしでフレームを書き出す
 tools/export_gif.py     プレビュー GIF とコマ一覧を作る
 assets/source/          元画像（点灯版 / 消灯版）
@@ -114,9 +122,9 @@ test/anim.test.js       状態遷移・左右対称・目の光漏れなしな�
 ## スプライトの作り方
 
 ```
-python3 tools/build_sprite.py      # web/sprite_data.js を作り直す（Pillow, numpy が必要）
-python3 tools/export_gif.py        # docs/preview/ を作り直す（node が必要）
-npm test
+npm run build                      # web/sprite_data.js と dist/koudaioh.html を作り直す（Pillow, numpy が必要）
+npm run preview                    # docs/preview/ を作り直す
+npm test                           # web/ を変えたのに dist/ を作り直していないと失敗する
 ```
 
 `build_sprite.py` の処理:

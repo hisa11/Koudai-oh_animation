@@ -122,3 +122,22 @@ test('文字列コマンド', () => {
   assert.strictEqual(a.snapshot().state, 'can_dead');
   assert.throws(() => a.command('dance'));
 });
+
+test('ブラウザで module が定義されていてもグローバルに登録される (Electron など)', () => {
+  const fs = require('fs');
+  const vm = require('vm');
+  for (const [file, name] of [['web/koudaioh_anim.js', 'KoudaiohAnim'], ['web/sprite_data.js', 'KOUDAIOH_SPRITE'],
+                              ['web/player.js', 'KoudaiohPlayer']]) {
+    const win = {};
+    const ctx = { window: win, module: { exports: {} } };
+    vm.runInNewContext(fs.readFileSync(file, 'utf8'), ctx);
+    assert.ok(win[name], `${file} -> window.${name}`);
+  }
+});
+
+test('1 ファイル版 dist/koudaioh.html が web/ と一致している', () => {
+  const fs = require('fs');
+  const { build, OUT } = require('../tools/build_standalone.js');
+  assert.ok(fs.existsSync(OUT), 'node tools/build_standalone.js で生成する');
+  assert.strictEqual(fs.readFileSync(OUT, 'utf8'), build(), 'web/ を変えたら node tools/build_standalone.js を実行する');
+});

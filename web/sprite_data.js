@@ -522,6 +522,6 @@
       "..............................26688662.....................................................266686662.....................................................26688662...............................",
     ]
   };
-  if (typeof module !== 'undefined' && module.exports) module.exports = SPRITE;
-  else root.KOUDAIOH_SPRITE = SPRITE;
-})(typeof self !== 'undefined' ? self : this);
+  if (typeof module === 'object' && module && module.exports) module.exports = SPRITE;
+  if (root) root.KOUDAIOH_SPRITE = SPRITE;   // ブラウザでは常にグローバルに登録
+})(typeof window !== 'undefined' ? window : typeof self !== 'undefined' ? self : null);
