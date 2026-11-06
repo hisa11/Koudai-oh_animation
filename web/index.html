@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Koudai-oh Animation</title>
+<style>
+  :root {
+    --bg: #000;
+    --panel: #0d1018;
+    --line: #2a3142;
+    --text: #d6dce8;
+    --dim: #7c8598;
+    --accent: #ff3a46;
+    --ok: #3cff82;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.4 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+  body { display: flex; flex-direction: column; }
+  #stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  canvas { image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
+  #panel { background: var(--panel); border-top: 1px solid var(--line); padding: 10px 16px 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+  .row:last-child { margin-bottom: 0; }
+  .label { color: var(--dim); width: 4.5em; flex: none; }
+  button { font: inherit; color: var(--text); background: #161b27; border: 1px solid var(--line);
+    padding: 6px 10px; border-radius: 4px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--dim); }
+  button.on { border-color: var(--accent); color: #fff; background: #2a0f14; }
+  button:disabled { opacity: .35; cursor: default; }
+  kbd { color: var(--dim); font-size: 11px; margin-left: 4px; }
+  select { font: inherit; color: var(--text); background: #161b27; border: 1px solid var(--line); padding: 5px; border-radius: 4px; }
+  #status { color: var(--dim); font-size: 12px; }
+  #status b { color: var(--text); font-weight: normal; }
+  #ws.ok { color: var(--ok); }
+  body.kiosk #panel { display: none; }
+  body.kiosk { cursor: none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="screen"></canvas></div>
+
+<div id="panel">
+  <div class="row">
+    <span class="label">状態</span>
+    <button data-state="idle">平時<kbd>1</kbd></button>
+    <button data-state="can_dead">CAN通信死<kbd>2</kbd></button>
+    <button data-state="auto">自動運転<kbd>3</kbd></button>
+    <button data-state="no_link">通信切断<kbd>5</kbd></button>
+  </div>
+  <div class="row">
+    <span class="label">動作</span>
+    <button data-act="fire">発射<kbd>4 / Space</kbd></button>
+    <button data-act="enter">登場<kbd>6</kbd></button>
+    <select id="enterFrom" title="どちら側から跳んでくるか">
+      <option value="right">右から</option>
+      <option value="left">左から</option>
+    </select>
+    <button data-act="exit">退場<kbd>7</kbd></button>
+    <select id="exitTo" title="どちら側へ跳んでいくか">
+      <option value="left">左へ</option>
+      <option value="right">右へ</option>
+    </select>
+  </div>
+  <div class="row" id="status">
+    状態 <b id="stState">-</b> ／ 動作 <b id="stAction">-</b> ／ 椅子 <b id="stPresent">-</b> ／ frame <b id="stFrame">0</b>
+    <span id="ws"></span>
+    <span>（H でパネル表示切替）</span>
+  </div>
+</div>
+
+<script src="sprite_data.js"></script>
+<script src="koudaioh_anim.js"></script>
+<script src="player.js"></script>
+<script>
+(function () {
+  'use strict';
+  // ---- URL パラメータ ------------------------------------------------------
+  //  ?state=auto      初期状態 (idle / can_dead / auto / no_link)
+  //  ?present=0       椅子に誰もいない状態から始める (登場で乗る)
+  //  ?fps=5           コマ速度
+  //  ?scale=4         拡大率 (既定は画面に収まる最大の整数倍)
+  //  ?ui=0            操作パネルを隠す (ロボット搭載ディスプレイ用)
+  //  ?ws=ws://host:port/   コマンドを受け取る WebSocket の接続先
+  //  ?can=slump       CAN 通信死を「ガクッと下がって静止」にする (既定は振動)
+  //  ?seed=1          乱数シード (スパークの出方を固定)
+  var q = new URLSearchParams(location.search);
+  var kiosk = q.get('ui') === '0';
+  if (kiosk) document.body.classList.add('kiosk');
+
+  var anim = new KoudaiohAnim.Animator(KOUDAIOH_SPRITE, {
+    state: q.get('state') || 'idle',
+    present: q.get('present') !== '0',
+    canDeadStyle: q.get('can') || 'shake',
+    seed: q.has('seed') ? Number(q.get('seed')) : undefined
+  });
+
+  var stage = document.getElementById('stage');
+  var player = new KoudaiohPlayer(document.getElementById('screen'), anim, {
+    fps: Number(q.get('fps')) || 5,
+    scale: q.has('scale') ? Math.max(1, parseInt(q.get('scale'), 10)) : 'auto',
+    fit: stage,
+    onFrame: updateUI
+  });
+
+  // ---- UI -----------------------------------------------------------------
+  var $ = function (id) { return document.getElementById(id); };
+  var stateBtns = Array.prototype.slice.call(document.querySelectorAll('[data-state]'));
+  var actBtns = {};
+  Array.prototype.forEach.call(document.querySelectorAll('[data-act]'), function (b) { actBtns[b.dataset.act] = b; });
+
+  function run(cmd, arg) {
+    try {
+      if (cmd === 'enter' && !arg) arg = $('enterFrom').value;
+      if (cmd === 'exit' && !arg) arg = $('exitTo').value;
+      var ok = anim.command(cmd, arg);
+      updateUI(anim.snapshot());
+      return ok;
+    } catch (e) {
+      console.warn(e.message);
+      return false;
+    }
+  }
+
+  function updateUI(s) {
+    stateBtns.forEach(function (b) { b.classList.toggle('on', b.dataset.state === s.state); });
+    actBtns.fire.disabled = !s.present || !!s.action;
+    actBtns.exit.disabled = !s.present || !!s.action;
+    actBtns.enter.disabled = s.present || !!s.action;
+    $('stState').textContent = s.state;
+    $('stAction').textContent = s.action || '-';
+    $('stPresent').textContent = s.present ? '乗っている' : '不在';
+    $('stFrame').textContent = s.frame;
+  }
+
+  stateBtns.forEach(function (b) { b.addEventListener('click', function () { run(b.dataset.state); }); });
+  Object.keys(actBtns).forEach(function (k) { actBtns[k].addEventListener('click', function () { run(k); }); });
+
+  var KEYS = { '1': 'idle', '2': 'can_dead', '3': 'auto', '4': 'fire', ' ': 'fire', '5': 'no_link', '6': 'enter', '7': 'exit' };
+  document.addEventListener('keydown', function (e) {
+    if (e.target.tagName === 'SELECT') return;
+    if (e.key === 'h' || e.key === 'H') {
+      document.body.classList.toggle('kiosk');
+      player.resize(); player.draw();
+      return;
+    }
+    var cmd = KEYS[e.key];
+    if (cmd) { e.preventDefault(); run(cmd); }
+  });
+
+  // ---- WebSocket (任意) ---------------------------------------------------
+  //  受け取るメッセージ: "auto" / "fire" / "enter left" のような文字列、
+  //  または {"cmd":"enter","arg":"left"} / {"state":"auto"} の JSON
+  //  送り返すメッセージ: {"event":"state"|"action_start"|"action_end", ...}
+  var wsUrl = q.get('ws');
+  var sock = null;
+  function connect() {
+    var label = $('ws');
+    try { sock = new WebSocket(wsUrl); } catch (e) { label.textContent = ' ws: URL 不正'; return; }
+    label.textContent = ' ws: 接続中…'; label.className = '';
+    sock.onopen = function () { label.textContent = ' ws: 接続'; label.className = 'ok'; };
+    sock.onclose = function () {
+      label.textContent = ' ws: 切断 (再接続待ち)'; label.className = '';
+      setTimeout(connect, 2000);
+    };
+    sock.onmessage = function (ev) {
+      var text = String(ev.data).trim(), cmd, arg;
+      if (text[0] === '{') {
+        try {
+          var m = JSON.parse(text);
+          cmd = m.cmd || m.state || m.action; arg = m.arg || m.dir;
+        } catch (e) { return; }
+      } else {
+        var parts = text.split(/\s+/); cmd = parts[0]; arg = parts[1];
+      }
+      run(cmd, arg);
+    };
+  }
+  if (wsUrl) {
+    connect();
+    anim.on(function (ev) {
+      if (sock && sock.readyState === 1) {
+        var out = { event: ev.type };
+        if (ev.state) out.state = ev.state;
+        if (ev.action) out.action = ev.action;
+        sock.send(JSON.stringify(out));
+      }
+    });
+  }
+
+  // 外から触れるように公開 (DevTools や別スクリプトから koudaioh.command('fire') など)
+  window.koudaioh = { anim: anim, player: player, command: run };
+
+  player.resize();
+  player.start();
+})();
+</script>
+</body>
+</html>

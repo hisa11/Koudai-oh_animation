@@ -1,0 +1,12 @@
+{
+  "name": "koudai-oh-animation",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Koudai-oh の 8bit 風ステータスアニメーション (5fps)",
+  "scripts": {
+    "test": "node --test",
+    "build:sprite": "python3 tools/build_sprite.py",
+    "preview": "python3 tools/export_gif.py"
+  },
+  "license": "UNLICENSED"
+}

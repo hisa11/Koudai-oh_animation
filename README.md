@@ -1,0 +1,138 @@
+# Koudai-oh Animation
+
+Koudai-oh の状態を 8bit 風ドット絵アニメーション（5fps）で表示する。
+ブラウザで `web/index.html` を開けば動く。ビルドもサーバも不要。
+
+![demo](docs/preview/demo.gif)
+
+## 動かし方
+
+```
+web/index.html をブラウザで開く（file:// のままでよい）
+```
+
+| キー | ボタン | 内容 |
+|---|---|---|
+| `1` | 平時 | ① アイドリング |
+| `2` | CAN通信死 | ② 内部ハードウェアエラー |
+| `3` | 自動運転 | ③ AUTO MODE |
+| `4` / `Space` | 発射 | ④ 発射（単発。終わると元の状態に戻る） |
+| `5` | 通信切断 | ⑤ スマホとの NO LINK |
+| `6` | 登場 | 画面外から椅子に飛び乗る（右から / 左から） |
+| `7` | 退場 | 椅子から画面外へ飛び降りる（左へ / 右へ） |
+| `H` | — | 操作パネルの表示切替 |
+
+### URL パラメータ
+
+| 例 | 内容 |
+|---|---|
+| `?state=auto` | 初期状態（`idle` / `can_dead` / `auto` / `no_link`） |
+| `?present=0` | 椅子に誰もいない状態から始める（登場で乗る） |
+| `?ui=0` | 操作パネルを隠し、画面いっぱいに表示（ロボット搭載ディスプレイ用） |
+| `?scale=4` | 拡大率。省略時は画面に収まる最大の整数倍 |
+| `?fps=5` | コマ速度 |
+| `?can=slump` | CAN 通信死を「ガクッと 1px 下がって静止」にする（既定は振動） |
+| `?ws=ws://192.168.0.10:8080/` | コマンドを受け取る WebSocket の接続先（切れたら 2 秒ごとに再接続） |
+| `?seed=1` | 乱数シード（スパークの出方を固定） |
+
+### 外部から状態を切り替える（WebSocket）
+
+`?ws=` を付けると、ページが WebSocket クライアントとして接続し、受け取ったコマンドで状態を切り替える。
+
+受信（どちらの形式でもよい）:
+
+```
+auto
+fire
+enter left
+{"cmd": "exit", "arg": "right"}
+{"state": "no_link"}
+```
+
+送信（状態が変わるたびにページから送る）:
+
+```json
+{"event": "state", "state": "auto"}
+{"event": "action_start", "action": "fire"}
+{"event": "action_end", "action": "fire"}
+```
+
+### JavaScript から
+
+```js
+const anim = new KoudaiohAnim.Animator(KOUDAIOH_SPRITE, { state: 'idle', seed: 1 });
+anim.setState('auto');   // 持続状態: idle / can_dead / auto / no_link
+anim.fire();             // 単発。椅子に乗っていて、他の動作中でなければ true
+anim.exit('left');       // 乗っているときだけ
+anim.enter('right');     // 不在のときだけ
+anim.command('enter', 'left');   // 文字列でも同じ
+const raster = anim.step();      // 1 コマ描いて進める。raster.data は 96x128 の RGBA
+```
+
+`web/index.html` では `window.koudaioh.command('fire')` で同じことができる。
+
+動作中（発射・登場・退場）に `setState` すると、動作が終わった後にその状態になる。
+動作中の別の動作は無視される（`false` が返る）。
+
+## モーション
+
+5fps（1 コマ 200ms）。解像度は 96×128 で、表示時に整数倍で拡大する。
+
+| | 本体 | 目 | エフェクト | ループ |
+|---|---|---|---|---|
+| ① 平時 | 1px 上げ下げ | 少し暗く → パッと明るく | — | 5 コマ |
+| ② CAN 通信死 | 毎コマ上下左右に 1px ランダム（`slump` なら 1px 沈んで静止） | 毎コマ点滅、赤 / 黄 / 紫にランダム変色、黒いノイズ線 | 黄・青のスパーク、行ずれグリッチ | ランダム |
+| ③ 自動運転 | 2 コマ周期で上下 | 光のラインが左右に往復 | 額マークが青 / 緑に点滅、頭上に `AUTO`、頭から広がるレーダー波 | 10 コマ |
+| ④ 発射 | 1px 沈む → 2px 跳ね上がる → 揺れ 2 コマ → 復帰 | 溜めで白く強く発光 | 胸からマズルフラッシュ、衝撃波リング、煙 | 5 コマ単発 |
+| ⑤ 通信切断 | 10 コマに 1 回だけゆっくり上下 | 消灯（バイザーの黒） | 頭上に `?` とアンテナ × がふわふわ、画面全体を減光 | 10 コマ |
+| 登場 | 画面下（床）から放物線で椅子に飛び乗る → 着地で 2px 沈む | 一度暗くしてからパッと点灯 | 残像、着地の土煙 | 9 コマ単発 |
+| 退場 | 屈んで溜める → 放物線で画面下へ飛び降りる | 溜めで明るく | 残像、踏み切りの土煙 | 7 コマ単発 |
+
+| | |
+|---|---|
+| ① 平時 ![](docs/preview/idle.gif) | ② CAN 通信死 ![](docs/preview/can_dead.gif) |
+| ③ 自動運転 ![](docs/preview/auto.gif) | ④ 発射 ![](docs/preview/fire.gif) |
+| ⑤ 通信切断 ![](docs/preview/no_link.gif) | 登場・退場 ![](docs/preview/enter_exit.gif) |
+
+コマ割りは `docs/preview/*_sheet.png`（全コマを横に並べたもの）で確認できる。
+
+## ファイル
+
+```
+web/index.html          プレーヤー（操作パネル、キー操作、URL パラメータ、WebSocket）
+web/koudaioh_anim.js    アニメーション本体。DOM 非依存（ブラウザでも Node でも同じ絵が出る）
+web/player.js           一定 fps で回して canvas に整数倍表示する
+web/sprite_data.js      スプライト（生成物。文字グリッドなので手でドット修正してもよい）
+tools/build_sprite.py   元画像 → sprite_data.js
+tools/render_frames.js  ブラウザなしでフレームを書き出す
+tools/export_gif.py     プレビュー GIF とコマ一覧を作る
+assets/source/          元画像（点灯版 / 消灯版）
+test/anim.test.js       状態遷移・左右対称・目の光漏れなしなどのテスト
+```
+
+## スプライトの作り方
+
+```
+python3 tools/build_sprite.py      # web/sprite_data.js を作り直す（Pillow, numpy が必要）
+python3 tools/export_gif.py        # docs/preview/ を作り直す（node が必要）
+npm test
+```
+
+`build_sprite.py` の処理:
+
+1. 元画像（765×1024、4px 格子のドット絵）を 8×8 ブロックの中央値で 96×128 に縮小。平均より輪郭が立つ
+2. 外周とつながった黒を背景として除去。元画像の椅子は靴と重なっているので行・列・明るさで切り離し、椅子は楕円で描き直す（本体が離れても欠けないように）
+3. 顔は消灯版（`koudaioh_eyes_off.jpg`）の画素を使い、赤い照り返しを含めない
+4. 目は元画像の向かって左の目を 8×8 セルの赤みで読み取って手で整えたもの（`EYE_STAMP`）を置く
+5. 左右対称化: 軸（列 44）の左右の色を平均して鏡映し、軸をキャンバス中央（列 47）へ寄せる
+6. k-means で 7 階調に減色、孤立点除去、額マークの描き直し、1px アウトライン
+
+`sprite_data.js` の文字の意味:
+
+| 文字 | 意味 |
+|---|---|
+| `.` | 透明 |
+| `0`〜`6` | グレー（暗 → 明） |
+| `o` | アウトライン |
+| `F` `E` `d` | 目（芯 / 赤 / 暗赤）。状態ごとの色に置き換わる |
+| `m` | 額のセンサーマーク。状態ごとの色に置き換わる |
