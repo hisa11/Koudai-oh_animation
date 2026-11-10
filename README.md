@@ -4,17 +4,18 @@ Koudai-oh の状態を 8bit 風ドット絵アニメーション（5fps）で表
 ブラウザで開けば動く。ビルドもサーバも不要。
 
 - `dist/koudaioh.html` … 羽なし版。1 ファイルでどこに置いても動く（ロボットへのコピー、アプリのプレビューなど）
-- `dist/koudaioh_wings.html` … 羽付き版。椅子の上に浮いて羽ばたく。これも 1 ファイル
-- `web/index.html` … 開発用。同じフォルダの `.js` を読み込むので、`web/` フォルダごと開く（`?wings=1` で羽付き）
+- `dist/koudaioh_wings.html` … 羽付き版・羽ばたき。椅子の上に浮いて羽ばたく
+- `dist/koudaioh_glide.html` … 羽付き版・滑空。羽を広げたまま、足裏の噴射で浮く
+- `web/index.html` … 開発用。同じフォルダの `.js` を読み込むので、`web/` フォルダごと開く（`?wings=1`、`?fly=glide`）
 
-| 羽なし | 羽付き |
-|---|---|
-| ![demo](docs/preview/demo.gif) | ![wings demo](docs/preview/wings_demo.gif) |
+| 羽なし | 羽付き・羽ばたき | 羽付き・滑空 |
+|---|---|---|
+| ![demo](docs/preview/demo.gif) | ![wings demo](docs/preview/wings_demo.gif) | ![glide demo](docs/preview/glide_demo.gif) |
 
 ## 動かし方
 
 ```
-dist/koudaioh.html（羽なし）か dist/koudaioh_wings.html（羽付き）をブラウザで開く（file:// のままでよい）
+dist/ の 1 ファイル版（koudaioh.html / koudaioh_wings.html / koudaioh_glide.html）をブラウザで開く（file:// のままでよい）
 ```
 
 `KoudaiohAnim is not defined` と出る場合は、`web/index.html` を単体で開いていて隣の `.js` が読めていない。
@@ -31,6 +32,7 @@ dist/koudaioh.html（羽なし）か dist/koudaioh_wings.html（羽付き）を�
 | `7` | 退場 | 椅子から画面外へ飛び降りる（左へ / 右へ）。羽付き版は飛び去る |
 | `H` | — | 操作パネルの表示切替 |
 | — | 羽付き版にする / 羽なし版にする | 版の切り替え（羽のデータが入っているページだけ） |
+| — | 滑空にする / 羽ばたきにする | 羽付き版の飛び方の切り替え |
 
 ### URL パラメータ
 
@@ -44,7 +46,8 @@ dist/koudaioh.html（羽なし）か dist/koudaioh_wings.html（羽付き）を�
 | `?can=slump` | CAN 通信死を「ガクッと下がって静止」にする（既定は振動） |
 | `?ws=ws://192.168.0.10:8080/` | コマンドを受け取る WebSocket の接続先（切れたら 2 秒ごとに再接続） |
 | `?seed=1` | 乱数シード（スパークの出方を固定） |
-| `?wings=1` / `?wings=0` | 羽付き版 / 羽なし版（既定は `dist/koudaioh_wings.html` だけ羽付き） |
+| `?wings=1` / `?wings=0` | 羽付き版 / 羽なし版（既定は `dist/koudaioh_wings.html` と `koudaioh_glide.html` だけ羽付き） |
+| `?fly=glide` / `?fly=flap` | 羽付き版の飛び方: 滑空 / 羽ばたき（既定は `koudaioh_glide.html` だけ滑空） |
 
 ### 外部から状態を切り替える（WebSocket）
 
@@ -72,7 +75,7 @@ enter left
 
 ```js
 const anim = new KoudaiohAnim.Animator(KOUDAIOH_SPRITE, { state: 'idle', seed: 1 });
-// 羽付き版: new KoudaiohAnim.Animator(KOUDAIOH_SPRITE, { wings: KOUDAIOH_WINGS })
+// 羽付き版: new KoudaiohAnim.Animator(KOUDAIOH_SPRITE, { wings: KOUDAIOH_WINGS, fly: 'flap' | 'glide' })
 anim.setState('auto');   // 持続状態: idle / can_dead / auto / no_link
 anim.fire();             // 単発。椅子に乗っていて、他の動作中でなければ true
 anim.exit('left');       // 乗っているときだけ
@@ -131,11 +134,43 @@ const raster = anim.step();      // 1 コマ描いて進める。raster.data は
 | ③ 自動運転 ![](docs/preview/wings_auto.gif) | ④ 発射 ![](docs/preview/wings_fire.gif) |
 | ⑤ 通信切断 ![](docs/preview/wings_no_link.gif) | 登場・退場 ![](docs/preview/wings_enter_exit.gif) |
 
+### 羽付き版・滑空（羽ばたかずに飛ぶ）
+
+羽を動かさずに「飛んでいる」と読ませるために、浮いている理由・羽の役割・浮遊感を別々の手がかりで見せている。
+
+| 手がかり | 内容 | 何を伝えるか |
+|---|---|---|
+| 足裏の噴射 | 白い芯に青い縁の炎。毎コマ長さがちらつき、火の粉が散る | 何の力で浮いているか |
+| 座面の波紋 | 噴射が当たった所から輪が広がる（椅子の上だけに描く） | 下へ押している力が実際に当たっている |
+| 座面の影 | 浮いた高さに応じた大きさ | 椅子から離れている |
+| 羽根筋の光 | 羽の白い筋に、付け根から先端へ水色の光が流れる（8bit のパレットサイクル） | 羽は飾りではなく働いている |
+| ぷかぷか | 12 コマ（2.4 秒）の正弦波で ±2 unit。羽ばたき版より遅く大きい | 空中に支えなく浮いている |
+| 羽のしなり | 体の上下に羽が 1 unit 遅れてついてくる | 羽が空気を受けている |
+
+羽のコマは 02（少し上げた滑空の形）で固定。高さは 14 unit（28px）で、噴射が座面に届く距離にしている。
+
+| | 噴射 | 羽・光 | 浮き方 |
+|---|---|---|---|
+| ① 平時 | 普通 | 02 固定、光はゆっくり | ゆっくり大きくぷかぷか |
+| ② CAN 通信死 | 途切れ途切れ | 羽がガタつく（02〜04）、光なし | 浮いたまま振動。`slump` なら椅子に落ちて噴射も止まる |
+| ③ 自動運転 | 強い | 02 固定、光が速い | 速く上下 |
+| ④ 発射 | 反動を噴射で受け止める（強く噴く） | 02 固定 | 浮いた位置から反動 |
+| ⑤ 通信切断 | 弱い | 04 で下げ気味、光なし | 低く浮き、10 コマに 1 回だけ動く |
+| 登場 | 降りながら逆噴射でブレーキ | 03 で広げて降り、02 で止まる | 斜め上から降りてくる |
+| 退場 | 強く噴いて上昇 | 03 | 斜め上へ飛び去る |
+
+| | |
+|---|---|
+| ① 平時 ![](docs/preview/glide_idle.gif) | ② CAN 通信死 ![](docs/preview/glide_can_dead.gif) |
+| ③ 自動運転 ![](docs/preview/glide_auto.gif) | ④ 発射 ![](docs/preview/glide_fire.gif) |
+| ⑤ 通信切断 ![](docs/preview/glide_no_link.gif) | 登場・退場 ![](docs/preview/glide_enter_exit.gif) |
+
 ## ファイル
 
 ```
 dist/koudaioh.html      1 ファイル版・羽なし（生成物。web/ の HTML と .js をまとめたもの）
-dist/koudaioh_wings.html  1 ファイル版・羽付き（生成物）
+dist/koudaioh_wings.html  1 ファイル版・羽付き・羽ばたき（生成物）
+dist/koudaioh_glide.html  1 ファイル版・羽付き・滑空（生成物）
 web/index.html          プレーヤー（操作パネル、キー操作、URL パラメータ、WebSocket）
 web/koudaioh_anim.js    アニメーション本体。DOM 非依存（ブラウザでも Node でも同じ絵が出る）
 web/player.js           一定 fps で回して canvas に整数倍表示する
@@ -143,7 +178,7 @@ web/sprite_data.js      スプライト（生成物。文字グリッドなの�
 web/sprite_wings.js     羽 5 コマ（生成物）。本体と椅子は sprite_data.js を共有する
 tools/build_sprite.py   元画像 → sprite_data.js
 tools/build_wings.py    羽のシート → sprite_wings.js
-tools/build_standalone.js  web/ → dist/koudaioh.html, dist/koudaioh_wings.html
+tools/build_standalone.js  web/ → dist/ の 1 ファイル版 3 つ
 tools/render_frames.js  ブラウザなしでフレームを書き出す
 tools/export_gif.py     プレビュー GIF とコマ一覧を作る
 assets/source/          元画像（KO-02 入り点灯版 / 旧点灯版 / 消灯版 / 羽のシート）

@@ -2,12 +2,12 @@
   "name": "koudai-oh-animation",
   "version": "1.0.0",
   "private": true,
-  "description": "Koudai-oh の 8bit 風ステータスアニメーション (5fps、羽なし / 羽付き)",
+  "description": "Koudai-oh の 8bit 風ステータスアニメーション (5fps、羽なし / 羽付き: 羽ばたき・滑空)",
   "scripts": {
     "test": "node --test",
     "build": "python3 tools/build_sprite.py && python3 tools/build_wings.py && node tools/build_standalone.js",
     "build:standalone": "node tools/build_standalone.js",
-    "preview": "python3 tools/export_gif.py && python3 tools/export_gif.py --wings"
+    "preview": "python3 tools/export_gif.py && python3 tools/export_gif.py --wings --scale 1 && python3 tools/export_gif.py --glide --scale 1"
   },
   "license": "UNLICENSED"
 }

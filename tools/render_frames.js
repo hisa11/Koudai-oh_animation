@@ -2,10 +2,11 @@
 /*
  * ブラウザなしでアニメーションのフレームを書き出す (プレビュー GIF 作成・動作確認用)。
  *
- *   node tools/render_frames.js <outdir> [--wings] [scenario ...]
+ *   node tools/render_frames.js <outdir> [--wings | --glide] [scenario ...]
  *
  * <outdir>/<scenario>/000.ppm, 001.ppm ... を出力する (PPM は PIL でそのまま読める)。
- * scenario を省略すると全部出す。--wings で羽付き版 (ディレクトリ名は wings_<scenario>)。
+ * scenario を省略すると全部出す。--wings で羽付き版 (羽ばたき。ディレクトリ名は wings_<scenario>)、
+ * --glide で羽付き版の滑空 (glide_<scenario>)。
  */
 'use strict';
 const fs = require('fs');
@@ -52,9 +53,9 @@ function writePPM(file, raster) {
   fs.writeFileSync(file, Buffer.concat([header, body]));
 }
 
-function run(name, outdir, wings) {
-  const a = new Animator(SPRITE, { seed: 7, wings: wings ? WINGS : null });
-  const dir = path.join(outdir, (wings ? 'wings_' : '') + name);
+function run(name, outdir, mode) {
+  const a = new Animator(SPRITE, { seed: 7, wings: mode ? WINGS : null, fly: mode === 'glide' ? 'glide' : 'flap' });
+  const dir = path.join(outdir, (mode ? mode + '_' : '') + name);
   fs.mkdirSync(dir, { recursive: true });
   let n = 0;
   const push = (count) => {
@@ -69,18 +70,18 @@ function run(name, outdir, wings) {
 
 function main() {
   const args = process.argv.slice(2);
-  const wings = args.includes('--wings');
-  const rest = args.filter((x) => x !== '--wings');
+  const mode = args.includes('--glide') ? 'glide' : args.includes('--wings') ? 'wings' : '';
+  const rest = args.filter((x) => x !== '--wings' && x !== '--glide');
   const outdir = rest[0];
   if (!outdir) {
-    console.error('usage: node tools/render_frames.js <outdir> [--wings] [scenario ...]');
+    console.error('usage: node tools/render_frames.js <outdir> [--wings | --glide] [scenario ...]');
     process.exit(1);
   }
   const names = rest.length > 1 ? rest.slice(1) : Object.keys(SCENARIOS);
   for (const name of names) {
     if (!SCENARIOS[name]) throw new Error('unknown scenario: ' + name);
-    const n = run(name, outdir, wings);
-    console.log(`${wings ? 'wings_' : ''}${name}: ${n} frames`);
+    const n = run(name, outdir, mode);
+    console.log(`${mode ? mode + '_' : ''}${name}: ${n} frames`);
   }
 }
 

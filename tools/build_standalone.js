@@ -4,7 +4,8 @@
  *
  *   node tools/build_standalone.js
  *     -> dist/koudaioh.html        羽なし版 (羽のデータは入れない)
- *     -> dist/koudaioh_wings.html  羽付き版 (既定で羽付き。?wings=0 で羽なしにもできる)
+ *     -> dist/koudaioh_wings.html  羽付き版・羽ばたき (?wings=0 で羽なし、?fly=glide で滑空にもできる)
+ *     -> dist/koudaioh_glide.html  羽付き版・滑空 (羽を広げたまま噴射で飛ぶ)
  *
  * 1 ファイル版は、隣のファイルを読めない環境 (アプリのプレビュー、HTML 単体のコピー、
  * 一部の組み込みブラウザ) でもそのまま動く。
@@ -19,6 +20,7 @@ const SRC = path.join(ROOT, 'web', 'index.html');
 const VARIANTS = [
   { out: path.join(ROOT, 'dist', 'koudaioh.html'), drop: ['sprite_wings.js'], wings: false },
   { out: path.join(ROOT, 'dist', 'koudaioh_wings.html'), drop: [], wings: true },
+  { out: path.join(ROOT, 'dist', 'koudaioh_glide.html'), drop: [], wings: true, fly: 'glide' },
 ];
 
 function build(variant) {
@@ -33,7 +35,8 @@ function build(variant) {
   });
   if (count === 0) throw new Error('埋め込む <script src> が見つからない');
   if (variant.wings) {
-    out = out.replace('<script>/* ---- ', '<script>window.KOUDAIOH_DEFAULT_WINGS = true;</script>\n<script>/* ---- ');
+    const defs = 'window.KOUDAIOH_DEFAULT_WINGS = true;' + (variant.fly ? " window.KOUDAIOH_DEFAULT_FLY = '" + variant.fly + "';" : '');
+    out = out.replace('<script>/* ---- ', '<script>' + defs + '</script>\n<script>/* ---- ');
   }
   // doctype の直後に生成物である旨を入れる
   return out.replace(/^(<!doctype html>\n)/i,

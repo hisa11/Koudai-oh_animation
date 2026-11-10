@@ -66,6 +66,7 @@
   <div class="row" id="wingRow" style="display:none">
     <span class="label">版</span>
     <button id="wingToggle"></button>
+    <button id="flyToggle" style="display:none"></button>
   </div>
   <div class="row" id="status">
     状態 <b id="stState">-</b> ／ 動作 <b id="stAction">-</b> ／ 椅子 <b id="stPresent">-</b> ／ frame <b id="stFrame">0</b>
@@ -111,9 +112,11 @@
   //  ?wings=1 / 0     羽付き版 / 羽なし版 (sprite_wings.js があるときだけ。既定は羽なし、
   //                   羽付きの 1 ファイル版 dist/koudaioh_wings.html では羽付き)
   var q = new URLSearchParams(location.search);
+  //  ?fly=glide      羽付き版の飛び方: flap (羽ばたき、既定) / glide (羽を広げたまま噴射で滑空)
   var hasWings = typeof KOUDAIOH_WINGS !== 'undefined';
   var useWings = hasWings && (q.has('wings') ? q.get('wings') !== '0' : window.KOUDAIOH_DEFAULT_WINGS === true);
-  if (useWings) document.title += ' (羽付き)';
+  var flyStyle = (q.get('fly') || window.KOUDAIOH_DEFAULT_FLY) === 'glide' ? 'glide' : 'flap';
+  if (useWings) document.title += flyStyle === 'glide' ? ' (羽付き・滑空)' : ' (羽付き)';
   var kiosk = q.get('ui') === '0';
   if (kiosk) document.body.classList.add('kiosk');
 
@@ -122,7 +125,8 @@
     present: q.get('present') !== '0',
     canDeadStyle: q.get('can') || 'shake',
     seed: q.has('seed') ? Number(q.get('seed')) : undefined,
-    wings: useWings ? KOUDAIOH_WINGS : null
+    wings: useWings ? KOUDAIOH_WINGS : null,
+    fly: flyStyle
   });
 
   var stage = document.getElementById('stage');
@@ -174,6 +178,16 @@
       q.set('wings', useWings ? '0' : '1');
       location.search = q.toString();
     });
+    if (useWings) {                                   // 飛び方の切り替え
+      var ft = $('flyToggle');
+      ft.style.display = '';
+      ft.textContent = flyStyle === 'glide' ? '羽ばたきにする' : '滑空にする';
+      ft.addEventListener('click', function () {
+        q.set('wings', '1');
+        q.set('fly', flyStyle === 'glide' ? 'flap' : 'glide');
+        location.search = q.toString();
+      });
+    }
   }
   Object.keys(actBtns).forEach(function (k) { actBtns[k].addEventListener('click', function () { run(k); }); });
 

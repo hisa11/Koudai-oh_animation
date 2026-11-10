@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """tools/render_frames.js でフレームを書き出し、プレビュー GIF と一覧画像を作る。
 
-  python3 tools/export_gif.py [--out docs/preview] [--scale 2] [--fps 5] [--wings] [scenario ...]
+  python3 tools/export_gif.py [--out docs/preview] [--scale 2] [--fps 5] [--wings | --glide] [scenario ...]
 
 出力:
   <out>/<scenario>.gif        5fps のループ GIF
@@ -26,12 +26,13 @@ def main() -> None:
     ap.add_argument("--scale", type=int, default=2)
     ap.add_argument("--fps", type=float, default=5)
     ap.add_argument("--sheet-scale", type=int, default=1)
-    ap.add_argument("--wings", action="store_true", help="羽付き版 (wings_<scenario>.gif)")
+    ap.add_argument("--wings", action="store_true", help="羽付き版・羽ばたき (wings_<scenario>.gif)")
+    ap.add_argument("--glide", action="store_true", help="羽付き版・滑空 (glide_<scenario>.gif)")
     a = ap.parse_args()
 
     a.out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
-        flags = ["--wings"] if a.wings else []
+        flags = ["--glide"] if a.glide else ["--wings"] if a.wings else []
         subprocess.run(["node", str(ROOT / "tools/render_frames.js"), tmp, *flags, *a.scenarios], check=True)
         for d in sorted(Path(tmp).iterdir()):
             frames = [Image.open(p).convert("RGB") for p in sorted(d.glob("*.ppm"))]

@@ -67,6 +67,7 @@
   <div class="row" id="wingRow" style="display:none">
     <span class="label">版</span>
     <button id="wingToggle"></button>
+    <button id="flyToggle" style="display:none"></button>
   </div>
   <div class="row" id="status">
     状態 <b id="stState">-</b> ／ 動作 <b id="stAction">-</b> ／ 椅子 <b id="stPresent">-</b> ／ frame <b id="stFrame">0</b>
@@ -992,8 +993,9 @@
  * 動きとエフェクトの寸法は unit (= sprite.anchors.unit px) 単位で書いてある。
  * 「1 ピクセル上げる」は 1 unit 動かすこと。
  *
- * 羽付き版: new Animator(KOUDAIOH_SPRITE, { wings: KOUDAIOH_WINGS })
- *   本体は椅子の上に浮いて羽ばたく。登場・退場は飛んで来て / 飛んで行く。
+ * 羽付き版: new Animator(KOUDAIOH_SPRITE, { wings: KOUDAIOH_WINGS, fly: 'flap' | 'glide' })
+ *   本体は椅子の上に浮いて飛ぶ。flap は羽ばたき、glide は羽を広げたまま噴射で滑空。
+ *   登場・退場は飛んで来て / 飛んで行く。
  */
 (function (root, factory) {
   // ブラウザでは常にグローバル (window.KoudaiohAnim) に登録する。
@@ -1028,7 +1030,9 @@
     smoke: [150, 156, 168],
     smokeDim: [86, 92, 104],
     ghost: [26, 36, 70],
-    fireBg: [52, 22, 6]
+    fireBg: [52, 22, 6],
+    glow: [90, 220, 255],
+    glowCore: [225, 252, 255]
   };
 
   // 目の色ランプ。F=芯 E=明赤 D=赤 d=暗赤。赤は元絵の目の色。目の外 (装甲) には光を漏らさない
@@ -1239,7 +1243,13 @@
           var c = f.rows[j][i];
           if (c === '.') continue;
           if (!pal[c]) throw new Error('wings: unknown char "' + c + '"');
-          out.push({ x: f.x + i, y: f.y + j, col: pal[c] });
+          var col = pal[c];
+          var mx = Math.max(col[0], col[1], col[2]), mn = Math.min(col[0], col[1], col[2]);
+          out.push({
+            x: f.x + i, y: f.y + j, col: col,
+            stripe: mx > 100 && mx - mn < 40,          // 羽根筋 (明るい灰色)
+            d: Math.abs(f.x + i + 0.5 - (wings.mirror + 1) / 2)   // 体の中心からの距離 (光の流れの位置)
+          });
         }
       return out;
     });
@@ -1256,6 +1266,9 @@
       glitch: null,        // { y0, y1, dx } 本体の一部の行を横にずらす
       trail: null,         // { dx, dy, wing } 残像
       wing: null,          // 羽付き版: 羽のコマ (0..4)
+      thrust: 0,           // 羽付き版 (滑空): 足裏の噴射の強さ 0..3
+      wingLag: 0,          // 羽付き版 (滑空): 羽の体に対する遅れ (px)
+      pulse: 0,            // 羽付き版 (滑空): 羽根筋を流れる光の速さ 0..2
       bg: C.bg,
       back: [],            // 本体より奥に描くエフェクト
       front: [],           // 本体より手前
@@ -1438,32 +1451,50 @@
     }
   };
 
-  // ---- 羽付き版: 椅子の上に浮いてぷかぷかしながら羽ばたく ------------------
-  // 羽のコマは 0..4 (シートの 01..05。0 が上げきり、4 が下げきり)。
-  // 打ち下ろし (0→4) で体が持ち上がり、打ち上げで少し沈む。高さと上下は unit
+  // ---- 羽付き版: 椅子の上に浮いて飛ぶ ------------------------------------
+  // 飛び方は 2 通り (opts.fly)。高さ・上下・推力は unit、羽のコマは 0..4 (シートの 01..05)
+  //  flap  : 羽ばたく。打ち下ろし (0→4) で体が持ち上がり、打ち上げで少し沈む
+  //  glide : 羽を広げたまま滑空。浮く理由は足裏の噴射 (座面に波紋)、羽は羽根筋を付け根から
+  //          先端へ光が流れる (パレットサイクル)。体はゆっくり大きくぷかぷか
   var HOVER = 12;
+  var SINE12 = [0, 1, 2, 2, 2, 1, 0, -1, -2, -2, -2, -1];   // 12 コマ (2.4 秒) で 1 周
   var FLY = {
-    idle:     { wing: [0, 1, 2, 3, 4, 3, 2, 1], bob: [1, 1, 0, -1, -1, -1, 0, 1], hover: HOVER },
-    auto:     { wing: [0, 2, 4, 2], bob: [1, 0, -1, 0], hover: HOVER },                      // 速く羽ばたく
-    no_link:  { wing: [3, 3, 4, 4, 4, 4, 4, 4, 3, 3], bob: [0, 0, 0, 0, 0, 1, 1, 1, 1, 1], hover: 5 }, // 省電力: 低く、羽は下げ気味
-    can_dead: { wing: null, bob: [0], hover: HOVER }                                        // 羽がランダムに痙攣
+    flap: {
+      idle:     { wing: [0, 1, 2, 3, 4, 3, 2, 1], bob: [1, 1, 0, -1, -1, -1, 0, 1], hover: HOVER },
+      auto:     { wing: [0, 2, 4, 2], bob: [1, 0, -1, 0], hover: HOVER },                      // 速く羽ばたく
+      no_link:  { wing: [3, 3, 4, 4, 4, 4, 4, 4, 3, 3], bob: [0, 0, 0, 0, 0, 1, 1, 1, 1, 1], hover: 5 }, // 省電力
+      can_dead: { wing: null, bob: [0], hover: HOVER }                                        // 羽が痙攣
+    },
+    glide: {
+      idle:     { wing: [1], bob: SINE12, hover: HOVER + 2, thrust: [2], pulse: 1, lag: true },
+      auto:     { wing: [1], bob: [0, 1, 1, 0, -1, -1], hover: HOVER + 2, thrust: [3], pulse: 2, lag: true }, // 推力強め・光が速い
+      no_link:  { wing: [3], bob: [0, 0, 0, 0, 0, 1, 1, 1, 1, 1], hover: 5, thrust: [1], pulse: 0 }, // 省電力: 低く、羽は下げ、光なし
+      can_dead: { wing: null, bob: [0], hover: HOVER + 2, thrust: null, pulse: 0 }               // 噴射が途切れる
+    }
   };
-  var FIRE_WING = [0, 2, 3, 4, 2];                  // 溜めで羽を上げ、発射で広げ、反動で打ち下ろす
+  var FIRE_WING = { flap: [0, 2, 3, 4, 2], glide: [1, 1, 1, 1, 1] };
+  var FIRE_THRUST = [1, 3, 3, 2, 2];                // 滑空: 発射の反動を噴射で受け止める
   // 登場: 画面外の上から斜めに降りてきて浮く位置で止まる (浮く位置からの相対、unit)
   var FLY_IN = [[70, -60], [48, -38], [28, -20], [12, -8], [3, -2], [0, 1], [0, 0], [0, 0], [0, 0]];
-  var FLY_IN_WING = [0, 2, 4, 2, 0, 2, 4, 3, 2];
-  // 退場: 沈んで溜め → 強く打ち下ろして上昇 → 斜め上へ飛び去る
+  var FLY_IN_WING = { flap: [0, 2, 4, 2, 0, 2, 4, 3, 2], glide: [2, 2, 2, 2, 1, 1, 1, 1, 1] };
+  var FLY_IN_THRUST = [1, 1, 2, 3, 3, 3, 2, 2, 2];  // 滑空: 降りながら逆噴射でブレーキ
+  // 退場: 沈んで溜め → 上昇 → 斜め上へ飛び去る
   var FLY_OUT = [[0, 2], [0, -6], [-8, -18], [-24, -36], [-46, -58]];
-  var FLY_OUT_WING = [0, 4, 2, 0, 4];
+  var FLY_OUT_WING = { flap: [0, 4, 2, 0, 4], glide: [1, 2, 2, 2, 2] };
+  var FLY_OUT_THRUST = [1, 3, 3, 3, 3];
+
+  function flyStyle(ctx) { return ctx.opts.fly === 'glide' ? 'glide' : 'flap'; }
+  function hoverOf(st) { return FLY[st].idle.hover; }   // 登場の到着点・退場の出発点 = 平時の高さ
 
   var WING_ACTION_FN = {
     enter: function (p, t, ctx, act) {
-      var U = ctx.U;
+      var U = ctx.U, st = flyStyle(ctx), HOVER = hoverOf(st);
       p.flying = true; p.glitch = null;
       p.dx = FLY_IN[t][0] * act.dir * U;
       p.dy = (FLY_IN[t][1] - HOVER) * U;
-      p.wing = FLY_IN_WING[t];
-      if (t > 0 && t < 5) p.trail = { dx: FLY_IN[t - 1][0] * act.dir * U, dy: (FLY_IN[t - 1][1] - HOVER) * U, wing: FLY_IN_WING[t - 1] };
+      p.wing = FLY_IN_WING[st][t];
+      if (st === 'glide') { p.thrust = FLY_IN_THRUST[t]; p.pulse = 2; }
+      if (t > 0 && t < 5) p.trail = { dx: FLY_IN[t - 1][0] * act.dir * U, dy: (FLY_IN[t - 1][1] - HOVER) * U, wing: FLY_IN_WING[st][t - 1] };
       if (p.eye.ramp !== 'off') {
         if (t === 6) p.eye.gain = 0.3;               // 起動: 目が一度暗く
         if (t === 7) p.eye.gain = 1.9;               // パッと点灯
@@ -1471,42 +1502,90 @@
       return p;
     },
     exit: function (p, t, ctx, act) {
-      var U = ctx.U;
+      var U = ctx.U, st = flyStyle(ctx), HOVER = hoverOf(st);
       p.flying = true; p.glitch = null;
       if (t < FLY_OUT.length) {
         p.dx = FLY_OUT[t][0] * act.dir * U;
         p.dy = (FLY_OUT[t][1] - HOVER) * U;
-        p.wing = FLY_OUT_WING[t];
+        p.wing = FLY_OUT_WING[st][t];
+        if (st === 'glide') { p.thrust = FLY_OUT_THRUST[t]; p.pulse = 2; }
         if (t === 0 && p.eye.ramp !== 'off') p.eye.gain = 1.6;
-        if (t > 1) p.trail = { dx: FLY_OUT[t - 1][0] * act.dir * U, dy: (FLY_OUT[t - 1][1] - HOVER) * U, wing: FLY_OUT_WING[t - 1] };
+        if (t > 1) p.trail = { dx: FLY_OUT[t - 1][0] * act.dir * U, dy: (FLY_OUT[t - 1][1] - HOVER) * U, wing: FLY_OUT_WING[st][t - 1] };
       } else {
         p.hidden = true;                             // 画面外
         var last = FLY_OUT.length - 1;
-        p.trail = t === FLY_OUT.length ? { dx: FLY_OUT[last][0] * act.dir * U, dy: (FLY_OUT[last][1] - HOVER) * U, wing: FLY_OUT_WING[last] } : null;
+        p.trail = t === FLY_OUT.length ? { dx: FLY_OUT[last][0] * act.dir * U, dy: (FLY_OUT[last][1] - HOVER) * U, wing: FLY_OUT_WING[st][last] } : null;
       }
       return p;
     }
   };
 
-  // 状態のポーズ (椅子に座った基準) を、浮いて羽ばたくポーズに直す
+  // 状態のポーズ (椅子に座った基準) を、浮いて飛ぶポーズに直す
   function fly(p, base, t, action, ctx) {
     if (p.flying || p.hidden) return p;
-    var U = ctx.U, f = FLY[base];
+    var U = ctx.U, st = flyStyle(ctx), f = FLY[st][base];
     if (action && action.type === 'fire') {
-      p.wing = FIRE_WING[action.t];
+      p.wing = FIRE_WING[st][action.t];
+      if (st === 'glide') { p.thrust = FIRE_THRUST[action.t]; p.pulse = f.pulse; }
       p.dy -= f.hover * U;                           // 発射の反動 (p.dy) はそのまま、浮いた位置から
     } else if (base === 'can_dead') {
       if (ctx.opts.canDeadStyle === 'slump' && t > 0) {
-        p.wing = 4;                                  // 椅子に落ちて、羽はだらりと下がる
+        p.wing = 4;                                  // 椅子に落ちて、羽はだらりと下がる。噴射も止まる
         return p;
       }
-      p.wing = Math.floor(ctx.rng() * 5);            // 振動 (p.dx, p.dy) はそのまま、羽が痙攣
+      var r = ctx.rng();
+      if (st === 'glide') {
+        p.wing = 1 + Math.floor(r * 3);              // 羽がガタつく (1..3)
+        p.thrust = ctx.rng() < 0.5 ? 0 : 1 + Math.floor(ctx.rng() * 3);   // 噴射が途切れ途切れ
+      } else {
+        p.wing = Math.floor(r * 5);                  // 振動 (p.dx, p.dy) はそのまま、羽が痙攣
+      }
       p.dy -= f.hover * U;
     } else {
+      var n = f.bob.length, bob = f.bob[t % n];
       p.wing = f.wing[t % f.wing.length];
-      p.dy = (f.bob[t % f.bob.length] - f.hover) * U;
+      p.dy = (bob - f.hover) * U;
+      if (st === 'glide') { p.thrust = f.thrust[t % f.thrust.length]; p.pulse = f.pulse; }
+      // 滑空: 羽は体の上下に 1 unit 遅れてついてくる (空気を受けてしなる)
+      if (f.lag) p.wingLag = -Math.sign(bob - f.bob[(t + n - 1) % n]) * U;
     }
     return p;
+  }
+
+  // 足裏の噴射炎。level 0..3、t で長さがちらつく。unit 単位のブロックで描く
+  var JET = { outer: [40, 110, 255], mid: [90, 210, 255], core: [235, 252, 255] };
+  function thrusterFlame(R, x, y, level, t, U, rnd) {
+    if (!level) return 0;
+    var len = [0, 3, 7, 10][level] - (t % 2) * (level > 1 ? 2 : 1) + (rnd() < 0.3 ? 1 : 0);
+    var w0 = level >= 2 ? 2 : 1;
+    y -= U;                                          // ブーツの底の内側から噴き出す
+    for (var r = 0; r < len; r++) {
+      var hw = Math.max(0, Math.round(w0 * Math.pow(1 - r / len, 0.7)));
+      for (var dx = -hw; dx <= hw; dx++) {
+        var col = Math.abs(dx) >= hw ? JET.outer : (Math.abs(dx) <= hw * 0.45 && r < len * 0.55 ? JET.core : JET.mid);
+        R.fillRect(x + dx * U - (U >> 1), y + r * U, x + dx * U - (U >> 1) + U - 1, y + r * U + U - 1, col);
+      }
+    }
+    if (level >= 2) R.dot(x + (rnd() < 0.5 ? -1 : 1) * U, y + (len + 1) * U, JET.mid, U);   // 火の粉
+    return y + len * U;                              // 炎の先端
+  }
+
+  // 噴射が座面に当たって広がる波紋 (椅子の画素の上だけに描く)
+  function downwash(R, x, y, t, U) {
+    var d = R.data;
+    var r = (2 + (t % 3) * 2) * U;
+    for (var k = 0; k < 2; k++) {
+      var rr = r + k * 3 * U, ry = Math.max(U, rr / 3.2);
+      var col = k ? [120, 170, 205] : [175, 225, 250];
+      for (var a = 0; a < 64; a++) {
+        var th = (a / 64) * Math.PI * 2;
+        var px = Math.round(x + Math.cos(th) * rr), py = Math.round(y + Math.sin(th) * ry);
+        if (px < 0 || py < 0 || px >= R.w || py >= R.h) continue;
+        var i = (py * R.w + px) * 4;
+        if (d[i] + d[i + 1] + d[i + 2] === 0) continue;
+        R.px(px, py, col);
+      }
+    }
   }
 
   // ------------------------------------------------------------------------
@@ -1585,9 +1664,18 @@
   function Animator(sprite, opts) {
     opts = opts || {};
     this.wings = opts.wings ? prepareWings(opts.wings) : null;
+    if (this.wings) {                                 // 羽根筋の光が流れる範囲 (付け根 → 先端)
+      var ds = [];
+      this.wings.forEach(function (f) { f.forEach(function (c) { if (c.stripe) ds.push(c.d); }); });
+      ds.sort(function (x, y) { return x - y; });
+      this.wingSpan = [ds[Math.floor(ds.length * 0.02)], ds[Math.floor(ds.length * 0.98)]];
+    }
     this.spr = prepareSprite(sprite, opts.wings);
     this.raster = new Raster(this.spr.w, this.spr.h);
-    this.opts = { canDeadStyle: opts.canDeadStyle === 'slump' ? 'slump' : 'shake' };
+    this.opts = {
+      canDeadStyle: opts.canDeadStyle === 'slump' ? 'slump' : 'shake',
+      fly: opts.fly === 'glide' ? 'glide' : 'flap'      // 羽付き版の飛び方
+    };
     this.rng = mulberry32(opts.seed != null ? opts.seed : (Date.now() & 0xffffffff));
     this.base = STATES.indexOf(opts.state) >= 0 ? opts.state : 'idle';
     this.present = opts.present !== false;
@@ -1652,6 +1740,7 @@
       present: this.present,
       action: this.action ? this.action.type : null,
       wings: !!this.wings,
+      fly: this.wings ? this.opts.fly : null,
       frame: this.frame
     };
   };
@@ -1707,8 +1796,11 @@
       R.px(s.x, s.y, S.pal[s.c]);
     }
 
-    // 羽付き版: 座面に落ちる影 (高く浮くほど小さく)
-    if (this.wings && !p.hidden) this._drawShadow(R, p);
+    // 羽付き版: 座面に落ちる影 (高く浮くほど小さく) と、噴射が座面に当たる波紋
+    if (this.wings && !p.hidden) {
+      this._drawShadow(R, p);
+      if (p.thrust >= 2) this._jets(R, p, true);
+    }
 
     // 残像
     if (p.trail) {
@@ -1721,8 +1813,9 @@
 
     // 本体 (羽は本体の後ろ)
     if (!p.hidden) {
-      if (this.wings && p.wing != null) this._drawWing(R, p.wing, p.dx, p.dy, null);
+      if (this.wings && p.wing != null) this._drawWing(R, p.wing, p.dx, p.dy + p.wingLag, null, p.pulse);
       this._drawBody(R, p);
+      if (this.wings && p.thrust) this._jets(R, p, false);
     }
 
     for (i = 0; i < p.front.length; i++) p.front[i](R, p);
@@ -1731,9 +1824,40 @@
     return R;
   };
 
-  Animator.prototype._drawWing = function (R, k, dx, dy, tint) {
+  // pulse > 0 (滑空) のとき、羽根筋 (明るい灰色の画素) に付け根から先端へ光を流す
+  Animator.prototype._drawWing = function (R, k, dx, dy, tint, pulse) {
     var cells = this.wings[k];
-    for (var i = 0; i < cells.length; i++) R.px(cells[i].x + dx, cells[i].y + dy, tint || cells[i].col);
+    var band = 0, pos = 0, U = this.spr.U;
+    if (pulse && !tint) {
+      var span = this.wingSpan, steps = pulse >= 2 ? 4 : 6;
+      band = 5 * U;
+      pos = span[0] + ((this.frame % steps) + 0.5) / steps * (span[1] - span[0]);
+    }
+    for (var i = 0; i < cells.length; i++) {
+      var c = cells[i], col = tint || c.col;
+      if (band && c.stripe) {
+        var dd = Math.abs(c.d - pos);
+        if (dd < band * 0.5) col = C.glowCore;
+        else if (dd < band) col = C.glow;
+      }
+      R.px(c.x + dx, c.y + dy, col);
+    }
+  };
+
+  // 足裏の噴射炎 (seat=false) / 座面の波紋 (seat=true)
+  Animator.prototype._jets = function (R, p, seat) {
+    var a = this.spr.a, U = this.spr.U, mirror = a.mirror;
+    var feet = [[a.feet[0][0] - 2, a.feet[0][1]], [mirror - (a.feet[0][0] - 2), a.feet[0][1]]];
+    var seatTop = a.seatY - 6 * U;
+    for (var i = 0; i < 2; i++) {
+      var x = feet[i][0] + p.dx, y = feet[i][1] + 1 + p.dy;
+      if (seat) {
+        var reach = y + [0, 3, 7, 10][p.thrust] * U;
+        if (Math.abs(p.dx) < 8 * U && reach >= seatTop) downwash(R, x, a.seatY - 2 * U, this.frame + i, U);
+      } else {
+        thrusterFlame(R, x, y, p.thrust, this.frame + i, U, this.rng);
+      }
+    }
   };
 
   Animator.prototype._drawShadow = function (R, p) {
@@ -1917,9 +2041,11 @@
   //  ?wings=1 / 0     羽付き版 / 羽なし版 (sprite_wings.js があるときだけ。既定は羽なし、
   //                   羽付きの 1 ファイル版 dist/koudaioh_wings.html では羽付き)
   var q = new URLSearchParams(location.search);
+  //  ?fly=glide      羽付き版の飛び方: flap (羽ばたき、既定) / glide (羽を広げたまま噴射で滑空)
   var hasWings = typeof KOUDAIOH_WINGS !== 'undefined';
   var useWings = hasWings && (q.has('wings') ? q.get('wings') !== '0' : window.KOUDAIOH_DEFAULT_WINGS === true);
-  if (useWings) document.title += ' (羽付き)';
+  var flyStyle = (q.get('fly') || window.KOUDAIOH_DEFAULT_FLY) === 'glide' ? 'glide' : 'flap';
+  if (useWings) document.title += flyStyle === 'glide' ? ' (羽付き・滑空)' : ' (羽付き)';
   var kiosk = q.get('ui') === '0';
   if (kiosk) document.body.classList.add('kiosk');
 
@@ -1928,7 +2054,8 @@
     present: q.get('present') !== '0',
     canDeadStyle: q.get('can') || 'shake',
     seed: q.has('seed') ? Number(q.get('seed')) : undefined,
-    wings: useWings ? KOUDAIOH_WINGS : null
+    wings: useWings ? KOUDAIOH_WINGS : null,
+    fly: flyStyle
   });
 
   var stage = document.getElementById('stage');
@@ -1980,6 +2107,16 @@
       q.set('wings', useWings ? '0' : '1');
       location.search = q.toString();
     });
+    if (useWings) {                                   // 飛び方の切り替え
+      var ft = $('flyToggle');
+      ft.style.display = '';
+      ft.textContent = flyStyle === 'glide' ? '羽ばたきにする' : '滑空にする';
+      ft.addEventListener('click', function () {
+        q.set('wings', '1');
+        q.set('fly', flyStyle === 'glide' ? 'flap' : 'glide');
+        location.search = q.toString();
+      });
+    }
   }
   Object.keys(actBtns).forEach(function (k) { actBtns[k].addEventListener('click', function () { run(k); }); });
 

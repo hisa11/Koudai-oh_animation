@@ -175,9 +175,9 @@ test('羽付き版: 椅子の上に浮いて羽ばたく (平時)', () => {
   assert.deepStrictEqual([...wings].sort(), [0, 1, 2, 3, 4], '5 コマすべて使う');
 });
 
-test('羽付き版: 全状態と動作がエラーなく描け、退場→登場で椅子に戻る', () => {
-  for (const style of ['shake', 'slump']) {
-    const a = new Animator(SPRITE, { seed: 3, wings: WINGS, canDeadStyle: style });
+test('羽付き版: 全状態と動作がエラーなく描け、退場→登場で椅子に戻る (羽ばたき / 滑空)', () => {
+  for (const [style, fly] of [['shake', 'flap'], ['slump', 'flap'], ['shake', 'glide'], ['slump', 'glide']]) {
+    const a = new Animator(SPRITE, { seed: 3, wings: WINGS, canDeadStyle: style, fly });
     for (const s of Animator.STATES) { a.setState(s); for (let i = 0; i < 12; i++) a.step(); }
     a.fire(); for (let i = 0; i < ACTION_LEN.fire; i++) a.step();
     a.exit('left'); for (let i = 0; i < ACTION_LEN.exit; i++) a.step();
@@ -187,7 +187,28 @@ test('羽付き版: 全状態と動作がエラーなく描け、退場→登場
   }
 });
 
-test('1 ファイル版 dist/ が web/ と一致している (羽なし / 羽付き)', () => {
+test('滑空: 羽は動かさず、噴射と光で飛ぶ。体はぷかぷか上下する', () => {
+  const a = new Animator(SPRITE, { seed: 1, wings: WINGS, fly: 'glide' });
+  const wings = new Set(), dys = new Set();
+  for (let t = 0; t < 12; t++) {
+    const p = a.pose();
+    wings.add(p.wing); dys.add(p.dy);
+    assert.ok(p.thrust >= 2, `t=${t} 噴射 ${p.thrust}`);
+    assert.ok(p.pulse > 0, '羽根筋に光が流れる');
+    assert.ok(p.dy < -10 * SPRITE.anchors.unit, `t=${t} 浮いている dy=${p.dy}`);
+    a.step();
+  }
+  assert.strictEqual(wings.size, 1, '羽のコマは固定 (バタつかない)');
+  assert.ok(dys.size >= 4, `上下に動く (${[...dys]})`);
+  // 登場の最後と平時の最初で高さがつながる
+  const b = new Animator(SPRITE, { seed: 1, wings: WINGS, fly: 'glide', present: false });
+  b.enter('right');
+  for (let i = 0; i < ACTION_LEN.enter - 1; i++) b.step();
+  const last = b.pose().dy; b.step();
+  assert.strictEqual(b.pose().dy, last);
+});
+
+test('1 ファイル版 dist/ が web/ と一致している (羽なし / 羽付き / 滑空)', () => {
   const fs = require('fs');
   const { build, VARIANTS } = require('../tools/build_standalone.js');
   for (const v of VARIANTS) {
