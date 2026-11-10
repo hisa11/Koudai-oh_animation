@@ -2,7 +2,8 @@
 """元画像から 8bit 風スプライトを生成する。
 
 入力:
-  assets/source/koudaioh.jpg           目が点灯している絵 (本体の基準)
+  assets/source/koudaioh_ko02.png      目が点灯している絵 (本体の基準。右肩に KO-02)
+                                       元の koudaioh.jpg を 1.417 倍にして文字を足したもの
   assets/source/koudaioh_eyes_off.jpg  同じ絵で目を消灯したもの (顔の素の画素と目の範囲の判定に使う)
 
 出力: web/sprite_data.js
@@ -23,7 +24,7 @@
   3. 顔は消灯版の画素を使う。点灯版で赤く、消灯版で暗い画素 (バイザーの中) を目とする
      -> 目の外の装甲への照り返しは入らない
   4. 左右対称化: 向かって左半分を右へ鏡映し、軸をキャンバス中央へ寄せる
-  5. k-means で減色、1px アウトライン
+  5. k-means で減色、右肩に KO-02 を描く (対称化の後なので鏡映されない)、1px アウトライン
 
 使い方:
   python3 tools/build_sprite.py
@@ -40,6 +41,7 @@ from PIL import Image
 
 W, H = 192, 256         # 論理解像度 = 元画像 (765x1024) のドット格子 4px ぶん
 CELL = 4                # 元画像の 1 ドット
+SRC_SIZE = (765, 1024)  # 元画像の大きさ (この大きさで 1 ドット = 4px)
 PHASE = (0, 1)          # ドット格子の位相 (x, y)。4x4 ブロック内の分散が最小になるずれ
 N_GRAYS = 10            # 本体のグレー階調数
 BG_LUM = 30             # これ未満で外周とつながった画素は背景
@@ -65,8 +67,12 @@ N8 = N4 + ((1, 1), (1, -1), (-1, 1), (-1, -1))
 # 1. 取り込みと背景除去
 # --------------------------------------------------------------------------
 def load_native(src: Path) -> np.ndarray:
-    """元画像を 4x4 ドットごとの中央値で 192x256 に取り込む。"""
-    a = np.asarray(Image.open(src).convert("RGB")).astype(np.int32)
+    """元画像を 4x4 ドットごとの中央値で 192x256 に取り込む。
+    大きさが 765x1024 でない絵 (KO-02 版は 1.417 倍) は先に 765x1024 へ縮める。"""
+    im = Image.open(src).convert("RGB")
+    if im.size != SRC_SIZE:
+        im = im.resize(SRC_SIZE, Image.BOX)
+    a = np.asarray(im).astype(np.int32)
     ph, pw = H * CELL + CELL, W * CELL + CELL
     pad = np.empty((ph, pw, 3), np.int32)
     h, w = min(a.shape[0], ph), min(a.shape[1], pw)
@@ -158,6 +164,42 @@ def eye_role(lit: np.ndarray, unlit: np.ndarray) -> str | None:
 
 
 MARK_LUM = 75           # 額マーク: これより暗い画素をマークとする
+
+
+# 右肩の KO-02。元絵は 1 文字 4x7px で、取り込むと潰れるので同じ角張った字形で打ち直す。
+# 元絵どおり右上がり (約 18 度) に傾ける: 列ごとに TEXT_SLOPE 行ずつ上げる (最終座標)
+FONT_KO02 = {
+    "K": ["#..#", "#.#.", "##..", "#...", "##..", "#.#.", "#..#"],
+    "O": ["####", "#..#", "#..#", "#..#", "#..#", "#..#", "####"],
+    "-": ["...", "...", "...", "###", "...", "...", "..."],
+    "0": ["####", "#..#", "#..#", "#..#", "#..#", "#..#", "####"],
+    "2": ["####", "...#", "...#", "####", "#...", "#...", "####"],
+}
+TEXT = "KO-02"
+TEXT_ORIGIN = (133, 146)    # 左端の列と、その列の文字の最下行
+TEXT_SLOPE = 0.32           # 1 列進むごとに上がる行数 (元絵: 22 列で 7 行)
+TEXT_CHAR = "0"             # 文字色 (パレットの最暗色)
+
+
+def draw_decal(grid: list[list[str]]) -> list[int]:
+    cols: list[str] = []
+    for i, ch in enumerate(TEXT):
+        g = FONT_KO02[ch]
+        if i:
+            cols.append("." * len(g))       # 字間 1px
+        cols += ["".join(row[x] for row in g) for x in range(len(g[0]))]
+    x0, ybot = TEXT_ORIGIN
+    pts = []
+    for i, col in enumerate(cols):
+        x = x0 + i
+        top = ybot - round(TEXT_SLOPE * i) - (len(col) - 1)
+        for j, c in enumerate(col):
+            if c == "#":
+                if grid[top + j][x] in ".o":
+                    raise ValueError(f"KO-02 が肩からはみ出す: ({x},{top + j})")
+                grid[top + j][x] = TEXT_CHAR
+                pts.append((x, top + j))
+    return [min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts)]
 
 
 # --------------------------------------------------------------------------
@@ -292,8 +334,10 @@ def build(src: Path, src_off: Path, out: Path) -> None:
 
     # 軸をキャンバス中央へ寄せる
     grid = [["."] * SHIFT + row[: W - SHIFT] for row in grid]
-    mirror = MIRROR + 2 * SHIFT          # 最終座標で x と mirror - x が対 (= 191)
-    cx = mirror // 2                     # 中央の左側の列 (95)。エフェクトの基準
+    mirror = MIRROR + 2 * SHIFT          # 最終座標で x と mirror - x が対 (= 190)
+    cx = mirror // 2                     # 軸の列 (95)。エフェクトの基準
+
+    decal = draw_decal(grid)             # 右肩の KO-02 (左右対称の例外)
 
     # 1px アウトライン (4 近傍)。椅子やエフェクトと重なったときに輪郭が立つ
     for y in range(H):
@@ -322,6 +366,7 @@ def build(src: Path, src_off: Path, out: Path) -> None:
         "chest": [cx, 158],
         "feet": [[44 + SHIFT, FEET_CUT_ROW], [mirror - 44 - SHIFT, FEET_CUT_ROW]],
         "seatY": int(STAND["cy"]),
+        "decal": decal,                  # 左右対称の例外になる範囲 (KO-02)
     }
 
     palette = {str(i): "#%02x%02x%02x" % tuple(int(v) for v in c) for i, c in enumerate(pal)}
@@ -359,7 +404,7 @@ def build(src: Path, src_off: Path, out: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", type=Path, default=ROOT / "assets/source/koudaioh.jpg")
+    ap.add_argument("--src", type=Path, default=ROOT / "assets/source/koudaioh_ko02.png")
     ap.add_argument("--src-off", type=Path, default=ROOT / "assets/source/koudaioh_eyes_off.jpg")
     ap.add_argument("--out", type=Path, default=ROOT / "web/sprite_data.js")
     a = ap.parse_args()

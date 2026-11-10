@@ -3,10 +3,12 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const SPRITE = require('../web/sprite_data.js');
+const WINGS = require('../web/sprite_wings.js');
 const { Animator, ACTION_LEN } = require('../web/koudaioh_anim.js');
 
 const W = SPRITE.w, H = SPRITE.h;
 const MIRROR = SPRITE.anchors.mirror;       // x と MIRROR - x が左右対称の対
+const AXIS_X = MIRROR / 2;
 
 function frameAt(state, t, opts) {
   const a = new Animator(SPRITE, Object.assign({ seed: 1, state }, opts));
@@ -26,10 +28,13 @@ test('スプライトの寸法', () => {
   }
 });
 
-test('本体と椅子は左右対称', () => {
+test('本体と椅子は左右対称 (肩の KO-02 の範囲だけ例外)', () => {
+  const [dx0, dy0, dx1, dy1] = SPRITE.anchors.decal;
+  const inDecal = (x, y) => x >= dx0 && x <= dx1 && y >= dy0 && y <= dy1;
   for (const key of ['body', 'stand']) {
     SPRITE[key].forEach((row, y) => {
       for (let x = 0; x < W; x++) {
+        if (inDecal(x, y) || inDecal(MIRROR - x, y)) continue;
         const m = MIRROR - x;
         const mirror = m >= 0 && m < W ? row[m] : '.';
         assert.strictEqual(row[x], mirror, `${key} (${x},${y})`);
@@ -127,7 +132,7 @@ test('ブラウザで module が定義されていてもグローバルに登録
   const fs = require('fs');
   const vm = require('vm');
   for (const [file, name] of [['web/koudaioh_anim.js', 'KoudaiohAnim'], ['web/sprite_data.js', 'KOUDAIOH_SPRITE'],
-                              ['web/player.js', 'KoudaiohPlayer']]) {
+                              ['web/player.js', 'KoudaiohPlayer'], ['web/sprite_wings.js', 'KOUDAIOH_WINGS']]) {
     const win = {};
     const ctx = { window: win, module: { exports: {} } };
     vm.runInNewContext(fs.readFileSync(file, 'utf8'), ctx);
@@ -135,9 +140,59 @@ test('ブラウザで module が定義されていてもグローバルに登録
   }
 });
 
-test('1 ファイル版 dist/koudaioh.html が web/ と一致している', () => {
+test('肩に KO-02 が入っている (右肩だけ)', () => {
+  const [x0, y0, x1, y1] = SPRITE.anchors.decal;
+  assert.ok(x0 > AXIS_X, '向かって右の肩');
+  let dark = 0;
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (SPRITE.body[y][x] === '0') dark++;
+  assert.ok(dark >= 40, `文字の画素 ${dark}`);
+});
+
+test('羽 5 コマ: 左右対称で、本体の外へ広がる', () => {
+  assert.strictEqual(WINGS.frames.length, 5);
+  for (const [k, f] of WINGS.frames.entries()) {
+    const cells = new Set();
+    f.rows.forEach((row, j) => { for (let i = 0; i < row.length; i++) if (row[i] !== '.') cells.add(`${f.x + i},${f.y + j},${row[i]}`); });
+    for (const c of cells) {
+      const [x, y, ch] = c.split(',');
+      assert.ok(cells.has(`${WINGS.mirror - Number(x)},${y},${ch}`), `frame ${k + 1} (${x},${y})`);
+    }
+    const xs = [...cells].map((c) => Number(c.split(',')[0]));
+    assert.ok(Math.min(...xs) < WINGS.ox + SPRITE.anchors.bbox[0], `frame ${k + 1} は本体より外まで広がる`);
+  }
+});
+
+test('羽付き版: 椅子の上に浮いて羽ばたく (平時)', () => {
+  const a = new Animator(SPRITE, { seed: 1, wings: WINGS });
+  assert.deepStrictEqual([a.raster.w, a.raster.h], [WINGS.w, WINGS.h]);
+  const wings = new Set();
+  for (let t = 0; t < 8; t++) {
+    const p = a.pose();
+    assert.ok(p.dy < -8 * SPRITE.anchors.unit, `t=${t} 浮いている dy=${p.dy}`);
+    wings.add(p.wing);
+    a.step();
+  }
+  assert.deepStrictEqual([...wings].sort(), [0, 1, 2, 3, 4], '5 コマすべて使う');
+});
+
+test('羽付き版: 全状態と動作がエラーなく描け、退場→登場で椅子に戻る', () => {
+  for (const style of ['shake', 'slump']) {
+    const a = new Animator(SPRITE, { seed: 3, wings: WINGS, canDeadStyle: style });
+    for (const s of Animator.STATES) { a.setState(s); for (let i = 0; i < 12; i++) a.step(); }
+    a.fire(); for (let i = 0; i < ACTION_LEN.fire; i++) a.step();
+    a.exit('left'); for (let i = 0; i < ACTION_LEN.exit; i++) a.step();
+    assert.strictEqual(a.snapshot().present, false);
+    a.enter('right'); for (let i = 0; i < ACTION_LEN.enter; i++) a.step();
+    assert.deepStrictEqual([a.snapshot().present, a.snapshot().action], [true, null]);
+  }
+});
+
+test('1 ファイル版 dist/ が web/ と一致している (羽なし / 羽付き)', () => {
   const fs = require('fs');
-  const { build, OUT } = require('../tools/build_standalone.js');
-  assert.ok(fs.existsSync(OUT), 'node tools/build_standalone.js で生成する');
-  assert.strictEqual(fs.readFileSync(OUT, 'utf8'), build(), 'web/ を変えたら node tools/build_standalone.js を実行する');
+  const { build, VARIANTS } = require('../tools/build_standalone.js');
+  for (const v of VARIANTS) {
+    assert.ok(fs.existsSync(v.out), 'node tools/build_standalone.js で生成する: ' + v.out);
+    assert.strictEqual(fs.readFileSync(v.out, 'utf8'), build(v), 'web/ を変えたら node tools/build_standalone.js を実行する');
+  }
+  assert.ok(!fs.readFileSync(VARIANTS[0].out, 'utf8').includes('KOUDAIOH_WINGS = WINGS'), '羽なし版に羽のデータは入れない');
 });

@@ -63,6 +63,10 @@
       <option value="right">右へ</option>
     </select>
   </div>
+  <div class="row" id="wingRow" style="display:none">
+    <span class="label">版</span>
+    <button id="wingToggle"></button>
+  </div>
   <div class="row" id="status">
     状態 <b id="stState">-</b> ／ 動作 <b id="stAction">-</b> ／ 椅子 <b id="stPresent">-</b> ／ frame <b id="stFrame">0</b>
     <span id="ws"></span>
@@ -71,6 +75,7 @@
 </div>
 
 <script src="sprite_data.js"></script>
+<script src="sprite_wings.js"></script>
 <script src="koudaioh_anim.js"></script>
 <script src="player.js"></script>
 <script>
@@ -103,7 +108,12 @@
   //  ?ws=ws://host:port/   コマンドを受け取る WebSocket の接続先
   //  ?can=slump       CAN 通信死を「ガクッと下がって静止」にする (既定は振動)
   //  ?seed=1          乱数シード (スパークの出方を固定)
+  //  ?wings=1 / 0     羽付き版 / 羽なし版 (sprite_wings.js があるときだけ。既定は羽なし、
+  //                   羽付きの 1 ファイル版 dist/koudaioh_wings.html では羽付き)
   var q = new URLSearchParams(location.search);
+  var hasWings = typeof KOUDAIOH_WINGS !== 'undefined';
+  var useWings = hasWings && (q.has('wings') ? q.get('wings') !== '0' : window.KOUDAIOH_DEFAULT_WINGS === true);
+  if (useWings) document.title += ' (羽付き)';
   var kiosk = q.get('ui') === '0';
   if (kiosk) document.body.classList.add('kiosk');
 
@@ -111,7 +121,8 @@
     state: q.get('state') || 'idle',
     present: q.get('present') !== '0',
     canDeadStyle: q.get('can') || 'shake',
-    seed: q.has('seed') ? Number(q.get('seed')) : undefined
+    seed: q.has('seed') ? Number(q.get('seed')) : undefined,
+    wings: useWings ? KOUDAIOH_WINGS : null
   });
 
   var stage = document.getElementById('stage');
@@ -148,11 +159,22 @@
     actBtns.enter.disabled = s.present || !!s.action;
     $('stState').textContent = s.state;
     $('stAction').textContent = s.action || '-';
-    $('stPresent').textContent = s.present ? '乗っている' : '不在';
+    $('stPresent').textContent = !s.present ? '不在' : s.wings ? '上に浮いている' : '乗っている';
     $('stFrame').textContent = s.frame;
   }
 
   stateBtns.forEach(function (b) { b.addEventListener('click', function () { run(b.dataset.state); }); });
+
+  // 羽あり / なしの切り替え (URL の wings を書き換えて読み直す)
+  if (hasWings) {
+    var wt = $('wingToggle');
+    $('wingRow').style.display = '';
+    wt.textContent = useWings ? '羽なし版にする' : '羽付き版にする';
+    wt.addEventListener('click', function () {
+      q.set('wings', useWings ? '0' : '1');
+      location.search = q.toString();
+    });
+  }
   Object.keys(actBtns).forEach(function (k) { actBtns[k].addEventListener('click', function () { run(k); }); });
 
   var KEYS = { '1': 'idle', '2': 'can_dead', '3': 'auto', '4': 'fire', ' ': 'fire', '5': 'no_link', '6': 'enter', '7': 'exit' };

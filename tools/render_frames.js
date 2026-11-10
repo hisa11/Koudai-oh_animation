@@ -2,15 +2,16 @@
 /*
  * ブラウザなしでアニメーションのフレームを書き出す (プレビュー GIF 作成・動作確認用)。
  *
- *   node tools/render_frames.js <outdir> [scenario ...]
+ *   node tools/render_frames.js <outdir> [--wings] [scenario ...]
  *
  * <outdir>/<scenario>/000.ppm, 001.ppm ... を出力する (PPM は PIL でそのまま読める)。
- * scenario を省略すると全部出す。
+ * scenario を省略すると全部出す。--wings で羽付き版 (ディレクトリ名は wings_<scenario>)。
  */
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const SPRITE = require('../web/sprite_data.js');
+const WINGS = require('../web/sprite_wings.js');
 const { Animator } = require('../web/koudaioh_anim.js');
 
 // 各シナリオは (animator, push) を受け取り、push(n) で n フレーム書き出す
@@ -51,9 +52,9 @@ function writePPM(file, raster) {
   fs.writeFileSync(file, Buffer.concat([header, body]));
 }
 
-function run(name, outdir) {
-  const a = new Animator(SPRITE, { seed: 7 });
-  const dir = path.join(outdir, name);
+function run(name, outdir, wings) {
+  const a = new Animator(SPRITE, { seed: 7, wings: wings ? WINGS : null });
+  const dir = path.join(outdir, (wings ? 'wings_' : '') + name);
   fs.mkdirSync(dir, { recursive: true });
   let n = 0;
   const push = (count) => {
@@ -67,16 +68,19 @@ function run(name, outdir) {
 }
 
 function main() {
-  const outdir = process.argv[2];
+  const args = process.argv.slice(2);
+  const wings = args.includes('--wings');
+  const rest = args.filter((x) => x !== '--wings');
+  const outdir = rest[0];
   if (!outdir) {
-    console.error('usage: node tools/render_frames.js <outdir> [scenario ...]');
+    console.error('usage: node tools/render_frames.js <outdir> [--wings] [scenario ...]');
     process.exit(1);
   }
-  const names = process.argv.length > 3 ? process.argv.slice(3) : Object.keys(SCENARIOS);
+  const names = rest.length > 1 ? rest.slice(1) : Object.keys(SCENARIOS);
   for (const name of names) {
     if (!SCENARIOS[name]) throw new Error('unknown scenario: ' + name);
-    const n = run(name, outdir);
-    console.log(`${name}: ${n} frames`);
+    const n = run(name, outdir, wings);
+    console.log(`${wings ? 'wings_' : ''}${name}: ${n} frames`);
   }
 }
 
