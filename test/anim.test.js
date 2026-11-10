@@ -59,6 +59,23 @@ test('目の外 (装甲) に光が漏れない: 平時の本体画素はパレ�
   }
 });
 
+test('目の赤は目の芯 (F) とつながった画素だけ (バイザーへの光の漏れがない)', () => {
+  const isEye = (x, y) => y >= 0 && y < H && x >= 0 && x < W && 'FEDd'.includes(SPRITE.body[y][x]);
+  const seen = new Set();
+  const q = [];
+  SPRITE.body.forEach((row, y) => { for (let x = 0; x < W; x++) if (row[x] === 'F') { seen.add(x + ',' + y); q.push([x, y]); } });
+  while (q.length) {
+    const [x, y] = q.pop();
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const k = (x + dx) + ',' + (y + dy);
+      if (!seen.has(k) && isEye(x + dx, y + dy)) { seen.add(k); q.push([x + dx, y + dy]); }
+    }
+  }
+  SPRITE.body.forEach((row, y) => {
+    for (let x = 0; x < W; x++) if (isEye(x, y)) assert.ok(seen.has(x + ',' + y), `(${x},${y}) '${row[x]}' が目の芯から離れている`);
+  });
+});
+
 test('平時は 5 コマでループする', () => {
   assert.ok(frameAt('idle', 1).equals(frameAt('idle', 6)));
   assert.ok(!frameAt('idle', 0).equals(frameAt('idle', 2)));   // 1px 上がっている
