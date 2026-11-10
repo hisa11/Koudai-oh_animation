@@ -15,7 +15,8 @@
  * 動きとエフェクトの寸法は unit (= sprite.anchors.unit px) 単位で書いてある。
  * 「1 ピクセル上げる」は 1 unit 動かすこと。
  *
- * 羽付き版: new Animator(KOUDAIOH_SPRITE, { wings: KOUDAIOH_WINGS, fly: 'flap' | 'glide' })
+ * 羽付き版: new Animator(KOUDAIOH_SPRITE, { wings: KOUDAIOH_WINGS, fly: 'flap' | 'glide', wingsOn: true })
+ *   wingsOn: false なら羽なしの姿で始まり、setWings(true) で光に包まれて羽が生える (逆も同じ)。
  *   本体は椅子の上に浮いて飛ぶ。flap は羽ばたき、glide は羽を広げたまま噴射で滑空。
  *   登場・退場は飛んで来て / 飛んで行く。
  */
@@ -29,7 +30,7 @@
   'use strict';
 
   var STATES = ['idle', 'can_dead', 'auto', 'no_link'];
-  var ACTIONS = ['fire', 'enter', 'exit'];
+  var ACTIONS = ['fire', 'enter', 'exit', 'transform'];
 
   // ------------------------------------------------------------------------
   // 色
@@ -54,6 +55,10 @@
     ghost: [26, 36, 70],
     fireBg: [52, 22, 6],
     glow: [90, 220, 255],
+    lightCore: [255, 255, 246],
+    lightHold: [236, 246, 255],
+    lightRim: [255, 232, 140],
+    lightRing: [150, 228, 255],
     glowCore: [225, 252, 255]
   };
 
@@ -288,6 +293,7 @@
       glitch: null,        // { y0, y1, dx } 本体の一部の行を横にずらす
       trail: null,         // { dx, dy, wing } 残像
       wing: null,          // 羽付き版: 羽のコマ (0..4)
+      light: null,         // 変身の光 (0..8)
       thrust: 0,           // 羽付き版 (滑空): 足裏の噴射の強さ 0..3
       wingLag: 0,          // 羽付き版 (滑空): 羽の体に対する遅れ (px)
       pulse: 0,            // 羽付き版 (滑空): 羽根筋を流れる光の速さ 0..2
@@ -383,7 +389,11 @@
   // s=0.2..0.8 の位置。x は進行方向の符号を掛けて使う
   var JUMP = [[51, 54], [38, 19], [26, -2], [13, -8]];
 
-  var ACTION_LEN = { fire: 5, enter: 9, exit: 7 };
+  var ACTION_LEN = { fire: 5, enter: 9, exit: 7, transform: 9 };
+  // 変身 (羽の付け外し): 0-2 光の円が中心から広がる / 3-4 全体を覆う (3 で姿が入れ替わる)
+  //                      5-6 光が網目に間引かれて薄れる / 7-8 きらめきだけ残る
+  var TRANSFORM_SWAP = 3;
+  var LIGHT_R = [6, 18, 42, 90, 90];               // 光の円の半径 (unit)
 
   var ACTION_FN = {
     // ④ 発射: 溜め → 発射 (跳ね上がり＋マズルフラッシュ) → 余韻 2 コマ → 復帰
@@ -685,10 +695,13 @@
   // ------------------------------------------------------------------------
   function Animator(sprite, opts) {
     opts = opts || {};
-    this.wings = opts.wings ? prepareWings(opts.wings) : null;
-    if (this.wings) {                                 // 羽根筋の光が流れる範囲 (付け根 → 先端)
+    // 羽のデータ (wingFrames) があれば、キャンバスは羽が収まる大きさにして、羽なしの姿もその中央に描く。
+    // そうすると変身 (setWings) で画面の大きさが変わらない。wingsOn が今羽を付けているかどうか
+    this.wingFrames = opts.wings ? prepareWings(opts.wings) : null;
+    this.wingsOn = !!this.wingFrames && opts.wingsOn !== false;
+    if (this.wingFrames) {                            // 羽根筋の光が流れる範囲 (付け根 → 先端)
       var ds = [];
-      this.wings.forEach(function (f) { f.forEach(function (c) { if (c.stripe) ds.push(c.d); }); });
+      this.wingFrames.forEach(function (f) { f.forEach(function (c) { if (c.stripe) ds.push(c.d); }); });
       ds.sort(function (x, y) { return x - y; });
       this.wingSpan = [ds[Math.floor(ds.length * 0.02)], ds[Math.floor(ds.length * 0.98)]];
     }
@@ -747,12 +760,45 @@
     return this._startAction('exit', to === 'right' ? 1 : -1);
   };
 
+  /**
+   * 羽の付け外し (羽のデータがあるときだけ)。中心から光が広がって全体を包み、光が消えると姿が変わっている。
+   * instant なら演出なしで即座に切り替える。椅子にいないときも即座。
+   */
+  Animator.prototype.setWings = function (on, instant) {
+    if (!this.wingFrames) return false;
+    on = !!on;
+    if (on === this.wingsOn) return false;
+    if (instant || !this.present) {
+      this.wingsOn = on;
+      this._emit({ type: 'wings', wings: on });
+      return true;
+    }
+    if (this.action) return false;
+    this.action = { type: 'transform', t: 0, dir: 1, to: on };
+    this._emit({ type: 'action_start', action: 'transform' });
+    return true;
+  };
+
+  /** 羽付きの飛び方: 'flap' (羽ばたき) / 'glide' (滑空)。その場で切り替わる */
+  Animator.prototype.setFly = function (style) {
+    style = style === 'glide' ? 'glide' : 'flap';
+    if (style === this.opts.fly) return false;
+    this.opts.fly = style;
+    this._emit({ type: 'fly', fly: style });
+    return true;
+  };
+
   /** 文字列コマンド (WebSocket やキー入力から使う) */
   Animator.prototype.command = function (cmd, arg) {
     if (STATES.indexOf(cmd) >= 0) return this.setState(cmd);
     if (cmd === 'fire') return this.fire();
     if (cmd === 'enter') return this.enter(arg);
     if (cmd === 'exit') return this.exit(arg);
+    if (cmd === 'wings') {                          // wings on / off / toggle
+      var on = arg == null || arg === 'toggle' ? !this.wingsOn : (arg === 'on' || arg === '1' || arg === true || arg === 'true');
+      return this.setWings(on);
+    }
+    if (cmd === 'fly') return this.setFly(arg);     // fly glide / flap
     throw new Error('unknown command: ' + cmd);
   };
 
@@ -761,8 +807,9 @@
       state: this.base,
       present: this.present,
       action: this.action ? this.action.type : null,
-      wings: !!this.wings,
-      fly: this.wings ? this.opts.fly : null,
+      wings: this.wingsOn,
+      canWings: !!this.wingFrames,
+      fly: this.opts.fly,
       frame: this.frame
     };
   };
@@ -780,16 +827,24 @@
       return away;
     }
     var p = STATE_FN[this.base](this.t, ctx);
-    if (this.action) {
-      var fn = (this.wings && WING_ACTION_FN[this.action.type]) || ACTION_FN[this.action.type];
-      p = fn(p, this.action.t, ctx, this.action);
+    var act = this.action && this.action.type !== 'transform' ? this.action : null;
+    if (act) {
+      var fn = (this.wingsOn && WING_ACTION_FN[act.type]) || ACTION_FN[act.type];
+      p = fn(p, act.t, ctx, act);
     }
-    if (this.wings) p = fly(p, this.base, this.t, this.action, ctx);
+    if (this.wingsOn) p = fly(p, this.base, this.t, act, ctx);
+    if (this.action && this.action.type === 'transform') p.light = this.action.t;
     return p;
   };
 
   /** 現在のフレームを描いて、時間を 1 コマ進める */
   Animator.prototype.step = function () {
+    var A = this.action;
+    if (A && A.type === 'transform' && A.t === TRANSFORM_SWAP && !A.swapped) {
+      this.wingsOn = A.to;                           // 光が全体を覆っている間に姿を入れ替える
+      A.swapped = true;
+      this._emit({ type: 'wings', wings: this.wingsOn });
+    }
     this.render(this.pose());
     this.frame++;
     this.t++;
@@ -819,14 +874,14 @@
     }
 
     // 羽付き版: 座面に落ちる影 (高く浮くほど小さく) と、噴射が座面に当たる波紋
-    if (this.wings && !p.hidden) {
+    if (this.wingsOn && !p.hidden) {
       this._drawShadow(R, p);
       if (p.thrust >= 2) this._jets(R, p, true);
     }
 
     // 残像
     if (p.trail) {
-      if (this.wings && p.trail.wing != null) this._drawWing(R, p.trail.wing, p.trail.dx, p.trail.dy, C.ghost);
+      if (this.wingsOn && p.trail.wing != null) this._drawWing(R, p.trail.wing, p.trail.dx, p.trail.dy, C.ghost);
       for (i = 0; i < S.body.length; i++) {
         var b = S.body[i];
         if (b.c !== 'o') R.px(b.x + p.trail.dx, b.y + p.trail.dy, C.ghost);
@@ -835,20 +890,58 @@
 
     // 本体 (羽は本体の後ろ)
     if (!p.hidden) {
-      if (this.wings && p.wing != null) this._drawWing(R, p.wing, p.dx, p.dy + p.wingLag, null, p.pulse);
+      if (this.wingsOn && p.wing != null) this._drawWing(R, p.wing, p.dx, p.dy + p.wingLag, null, p.pulse);
       this._drawBody(R, p);
-      if (this.wings && p.thrust) this._jets(R, p, false);
+      if (this.wingsOn && p.thrust) this._jets(R, p, false);
     }
 
     for (i = 0; i < p.front.length; i++) p.front[i](R, p);
     if (p.dim) R.darken(0.42, 0.45, 0.58);
     for (i = 0; i < p.hud.length; i++) p.hud[i](R, p);
+    if (p.light != null) this._drawLight(R, p);       // 変身の光は一番上
     return R;
+  };
+
+  // 変身の光。中心は本体の真ん中 (浮いていればその位置)
+  Animator.prototype._drawLight = function (R, p) {
+    var a = this.spr.a, U = this.spr.U, t = p.light;
+    var cx = a.head[0] + 0.5 + p.dx, cy = (a.bbox[1] + a.bbox[3]) / 2 + p.dy;
+    var x, y, dx, dy;
+    if (t < LIGHT_R.length) {
+      var r = LIGHT_R[t] * U;
+      var core = t === 4 ? C.lightHold : C.lightCore;
+      for (y = Math.max(0, Math.floor(cy - r)); y <= Math.min(R.h - 1, Math.ceil(cy + r)); y++)
+        for (x = Math.max(0, Math.floor(cx - r)); x <= Math.min(R.w - 1, Math.ceil(cx + r)); x++) {
+          dx = x + 0.5 - cx; dy = y + 0.5 - cy;
+          var d = Math.sqrt(dx * dx + dy * dy);
+          if (d <= r) R.px(x, y, d > r - 2 * U ? C.lightRim : core);
+        }
+      R.circle(cx, cy, r + 2 * U, C.lightRing, U);
+    } else if (t < 7) {
+      // 網目に間引いて薄れる (5: 半分、6: 4 分の 1)。網目の 1 マスは 1 unit
+      var r2 = LIGHT_R[4] * U;
+      for (y = 0; y < R.h; y++)
+        for (x = 0; x < R.w; x++) {
+          var gx = Math.floor(x / U), gy = Math.floor(y / U);
+          var on = t === 5 ? (gx + gy) % 2 === 0 : gx % 2 === 0 && gy % 2 === 0;
+          if (!on) continue;
+          dx = x + 0.5 - cx; dy = y + 0.5 - cy;
+          if (dx * dx + dy * dy <= r2 * r2) R.px(x, y, C.lightCore);
+        }
+    } else {
+      // きらめきだけ残る (羽が付いたなら羽の広がりまで)
+      var w = (this.wingsOn ? 70 : 40) * U, h = 48 * U;
+      var n = t === 7 ? 10 : 5;
+      for (var k = 0; k < n; k++) {
+        var sx = cx + (this.rng() * 2 - 1) * w, sy = cy + (this.rng() * 2 - 1) * h;
+        sparkle(R, sx, sy, t === 7 ? 2 : 1, C.white, k % 2 ? C.lightRim : C.lightRing, U);
+      }
+    }
   };
 
   // pulse > 0 (滑空) のとき、羽根筋 (明るい灰色の画素) に付け根から先端へ光を流す
   Animator.prototype._drawWing = function (R, k, dx, dy, tint, pulse) {
-    var cells = this.wings[k];
+    var cells = this.wingFrames[k];
     var band = 0, pos = 0, U = this.spr.U;
     if (pulse && !tint) {
       var span = this.wingSpan, steps = pulse >= 2 ? 4 : 6;

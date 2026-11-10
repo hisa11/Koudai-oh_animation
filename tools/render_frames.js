@@ -30,6 +30,13 @@ const SCENARIOS = {
     a.exit('left');
     push(7 + 3);
   },
+  // 変身 (羽のデータがあるときだけ): 羽なし → 光 → 羽あり → 光 → 羽なし
+  transform: (a, push) => {
+    a.setWings(false, true);
+    push(4);
+    a.setWings(true); push(9 + 8);
+    a.setWings(false); push(9 + 4);
+  },
   demo: (a, push) => {
     a.present = false;
     push(2);
@@ -77,7 +84,8 @@ function main() {
     console.error('usage: node tools/render_frames.js <outdir> [--wings | --glide] [scenario ...]');
     process.exit(1);
   }
-  const names = rest.length > 1 ? rest.slice(1) : Object.keys(SCENARIOS);
+  const names = rest.length > 1 ? rest.slice(1)
+    : Object.keys(SCENARIOS).filter((n) => mode || n !== 'transform');   // 変身は羽付きのときだけ
   for (const name of names) {
     if (!SCENARIOS[name]) throw new Error('unknown scenario: ' + name);
     const n = run(name, outdir, mode);

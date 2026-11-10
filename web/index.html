@@ -64,8 +64,8 @@
     </select>
   </div>
   <div class="row" id="wingRow" style="display:none">
-    <span class="label">版</span>
-    <button id="wingToggle"></button>
+    <span class="label">羽</span>
+    <button id="wingToggle"></button><kbd>W</kbd>
     <button id="flyToggle" style="display:none"></button>
   </div>
   <div class="row" id="status">
@@ -109,14 +109,15 @@
   //  ?ws=ws://host:port/   コマンドを受け取る WebSocket の接続先
   //  ?can=slump       CAN 通信死を「ガクッと下がって静止」にする (既定は振動)
   //  ?seed=1          乱数シード (スパークの出方を固定)
-  //  ?wings=1 / 0     羽付き版 / 羽なし版 (sprite_wings.js があるときだけ。既定は羽なし、
-  //                   羽付きの 1 ファイル版 dist/koudaioh_wings.html では羽付き)
+  //  ?wings=1 / 0     羽付きで始める / 羽なしで始める (sprite_wings.js があるときだけ。既定は羽なし、
+  //                   羽付きの 1 ファイル版 dist/koudaioh_wings.html, koudaioh_glide.html では羽付き)
+  //                   羽のデータがあれば、途中で光に包まれて羽が生える / 消える (W キー、ボタン、"wings" コマンド)
+  //  ?fly=glide      羽付きの飛び方: flap (羽ばたき、既定) / glide (羽を広げたまま噴射で滑空)
   var q = new URLSearchParams(location.search);
-  //  ?fly=glide      羽付き版の飛び方: flap (羽ばたき、既定) / glide (羽を広げたまま噴射で滑空)
   var hasWings = typeof KOUDAIOH_WINGS !== 'undefined';
   var useWings = hasWings && (q.has('wings') ? q.get('wings') !== '0' : window.KOUDAIOH_DEFAULT_WINGS === true);
   var flyStyle = (q.get('fly') || window.KOUDAIOH_DEFAULT_FLY) === 'glide' ? 'glide' : 'flap';
-  if (useWings) document.title += flyStyle === 'glide' ? ' (羽付き・滑空)' : ' (羽付き)';
+  var baseTitle = document.title;
   var kiosk = q.get('ui') === '0';
   if (kiosk) document.body.classList.add('kiosk');
 
@@ -125,7 +126,8 @@
     present: q.get('present') !== '0',
     canDeadStyle: q.get('can') || 'shake',
     seed: q.has('seed') ? Number(q.get('seed')) : undefined,
-    wings: useWings ? KOUDAIOH_WINGS : null,
+    wings: hasWings ? KOUDAIOH_WINGS : null,      // 羽のデータがあれば羽なしの姿でも同じ大きさのキャンバス
+    wingsOn: useWings,
     fly: flyStyle
   });
 
@@ -165,33 +167,34 @@
     $('stAction').textContent = s.action || '-';
     $('stPresent').textContent = !s.present ? '不在' : s.wings ? '上に浮いている' : '乗っている';
     $('stFrame').textContent = s.frame;
+    if (s.canWings) {
+      $('wingToggle').textContent = s.wings ? '羽を消す' : '羽を生やす';
+      $('wingToggle').disabled = !!s.action;
+      $('flyToggle').textContent = s.fly === 'glide' ? '羽ばたきにする' : '滑空にする';
+      $('flyToggle').style.display = s.wings ? '' : 'none';
+      document.title = baseTitle + (s.wings ? (s.fly === 'glide' ? ' (羽付き・滑空)' : ' (羽付き)') : '');
+    }
   }
 
   stateBtns.forEach(function (b) { b.addEventListener('click', function () { run(b.dataset.state); }); });
 
-  // 羽あり / なしの切り替え (URL の wings を書き換えて読み直す)
+  // 羽を生やす / 消す (光に包まれて変身) と、飛び方の切り替え。どちらもその場で変わる。
+  // 読み直しても同じ姿で始まるように URL も書き換える (file:// などで書き換えられなければそのまま)
   if (hasWings) {
-    var wt = $('wingToggle');
     $('wingRow').style.display = '';
-    wt.textContent = useWings ? '羽なし版にする' : '羽付き版にする';
-    wt.addEventListener('click', function () {
-      q.set('wings', useWings ? '0' : '1');
-      location.search = q.toString();
+    $('wingToggle').addEventListener('click', function () { run('wings', 'toggle'); });
+    $('flyToggle').addEventListener('click', function () { run('fly', anim.opts.fly === 'glide' ? 'flap' : 'glide'); });
+    anim.on(function (ev) {
+      if (ev.type !== 'wings' && ev.type !== 'fly') return;
+      if (ev.type === 'wings') q.set('wings', ev.wings ? '1' : '0');
+      if (ev.type === 'fly') q.set('fly', ev.fly);
+      try { history.replaceState(null, '', '?' + q.toString()); } catch (e) { /* file:// など */ }
     });
-    if (useWings) {                                   // 飛び方の切り替え
-      var ft = $('flyToggle');
-      ft.style.display = '';
-      ft.textContent = flyStyle === 'glide' ? '羽ばたきにする' : '滑空にする';
-      ft.addEventListener('click', function () {
-        q.set('wings', '1');
-        q.set('fly', flyStyle === 'glide' ? 'flap' : 'glide');
-        location.search = q.toString();
-      });
-    }
   }
   Object.keys(actBtns).forEach(function (k) { actBtns[k].addEventListener('click', function () { run(k); }); });
 
-  var KEYS = { '1': 'idle', '2': 'can_dead', '3': 'auto', '4': 'fire', ' ': 'fire', '5': 'no_link', '6': 'enter', '7': 'exit' };
+  var KEYS = { '1': 'idle', '2': 'can_dead', '3': 'auto', '4': 'fire', ' ': 'fire', '5': 'no_link', '6': 'enter', '7': 'exit',
+               'w': 'wings', 'W': 'wings' };
   document.addEventListener('keydown', function (e) {
     if (e.target.tagName === 'SELECT') return;
     if (e.key === 'h' || e.key === 'H') {
@@ -238,6 +241,8 @@
         var out = { event: ev.type };
         if (ev.state) out.state = ev.state;
         if (ev.action) out.action = ev.action;
+        if (ev.wings != null) out.wings = ev.wings;
+        if (ev.fly) out.fly = ev.fly;
         sock.send(JSON.stringify(out));
       }
     });

@@ -208,6 +208,34 @@ test('滑空: 羽は動かさず、噴射と光で飛ぶ。体はぷかぷか上
   assert.strictEqual(b.pose().dy, last);
 });
 
+test('変身: 光が全体を覆っている間に羽が生え、光が消えると羽付きになっている (逆も)', () => {
+  const a = new Animator(SPRITE, { seed: 1, wings: WINGS, wingsOn: false });
+  assert.deepStrictEqual([a.raster.w, a.raster.h], [WINGS.w, WINGS.h], '羽なしの姿でも同じ大きさ');
+  a.step();
+  assert.strictEqual(a.setWings(true), true);
+  assert.strictEqual(a.fire(), false, '変身中は他の動作をしない');
+  const px = (r, x, y) => Array.from(r.data.slice((y * r.w + x) * 4, (y * r.w + x) * 4 + 3));
+  for (let t = 0; t < ACTION_LEN.transform; t++) {
+    const p = a.pose();
+    assert.strictEqual(p.light, t);
+    const r = a.step();
+    assert.strictEqual(a.wingsOn, t >= 3, `t=${t} 入れ替わりは光が覆う 3 コマ目`);
+    if (t === 3 || t === 4) {                       // 全体が光っている: 画面の真ん中と左右の端が白い
+      for (const x of [5, Math.floor(r.w / 2), r.w - 6]) assert.ok(px(r, x, Math.floor(r.h / 2)).every((v) => v > 220), `t=${t} x=${x}`);
+    }
+  }
+  assert.deepStrictEqual([a.snapshot().action, a.snapshot().wings], [null, true]);
+  assert.ok(a.pose().dy < 0, '羽が生えたら浮いている');
+  assert.strictEqual(a.command('wings', 'off'), true);
+  for (let t = 0; t < ACTION_LEN.transform; t++) a.step();
+  assert.deepStrictEqual([a.snapshot().wings, a.pose().dy <= 0 && a.pose().dy > -4], [false, true], '羽なしに戻ると椅子に座る');
+  // 羽のデータがないと変身できない / 不在なら即座に切り替わる
+  assert.strictEqual(new Animator(SPRITE, { seed: 1 }).setWings(true), false);
+  const b = new Animator(SPRITE, { seed: 1, wings: WINGS, wingsOn: false, present: false });
+  assert.strictEqual(b.setWings(true), true);
+  assert.deepStrictEqual([b.wingsOn, b.snapshot().action], [true, null]);
+});
+
 test('1 ファイル版 dist/ が web/ と一致している (羽なし / 羽付き / 滑空)', () => {
   const fs = require('fs');
   const { build, VARIANTS } = require('../tools/build_standalone.js');

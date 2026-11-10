@@ -31,8 +31,8 @@ dist/ の 1 ファイル版（koudaioh.html / koudaioh_wings.html / koudaioh_gli
 | `6` | 登場 | 画面外から椅子に飛び乗る（右から / 左から）。羽付き版は飛んで来る |
 | `7` | 退場 | 椅子から画面外へ飛び降りる（左へ / 右へ）。羽付き版は飛び去る |
 | `H` | — | 操作パネルの表示切替 |
-| — | 羽付き版にする / 羽なし版にする | 版の切り替え（羽のデータが入っているページだけ） |
-| — | 滑空にする / 羽ばたきにする | 羽付き版の飛び方の切り替え |
+| `W` | 羽を生やす / 羽を消す | 変身。中心から光が広がって全体を包み、光が消えると羽が生えて（消えて）いる。羽のデータが入っているページ（`koudaioh_wings.html` / `koudaioh_glide.html`）だけ |
+| — | 滑空にする / 羽ばたきにする | 羽付きの飛び方の切り替え（その場で変わる） |
 
 ### URL パラメータ
 
@@ -46,7 +46,7 @@ dist/ の 1 ファイル版（koudaioh.html / koudaioh_wings.html / koudaioh_gli
 | `?can=slump` | CAN 通信死を「ガクッと下がって静止」にする（既定は振動） |
 | `?ws=ws://192.168.0.10:8080/` | コマンドを受け取る WebSocket の接続先（切れたら 2 秒ごとに再接続） |
 | `?seed=1` | 乱数シード（スパークの出方を固定） |
-| `?wings=1` / `?wings=0` | 羽付き版 / 羽なし版（既定は `dist/koudaioh_wings.html` と `koudaioh_glide.html` だけ羽付き） |
+| `?wings=1` / `?wings=0` | 羽付きで始める / 羽なしで始める（既定は `koudaioh_wings.html` と `koudaioh_glide.html` だけ羽付き）。変身すると URL もこれに書き換わる |
 | `?fly=glide` / `?fly=flap` | 羽付き版の飛び方: 滑空 / 羽ばたき（既定は `koudaioh_glide.html` だけ滑空） |
 
 ### 外部から状態を切り替える（WebSocket）
@@ -61,6 +61,8 @@ fire
 enter left
 {"cmd": "exit", "arg": "right"}
 {"state": "no_link"}
+wings on          羽を生やす (変身)。off で消す、toggle で反対に
+fly glide         羽付きの飛び方。flap で羽ばたき
 ```
 
 送信（状態が変わるたびにページから送る）:
@@ -69,18 +71,23 @@ enter left
 {"event": "state", "state": "auto"}
 {"event": "action_start", "action": "fire"}
 {"event": "action_end", "action": "fire"}
+{"event": "wings", "wings": true}
+{"event": "fly", "fly": "glide"}
 ```
 
 ### JavaScript から
 
 ```js
 const anim = new KoudaiohAnim.Animator(KOUDAIOH_SPRITE, { state: 'idle', seed: 1 });
-// 羽付き版: new KoudaiohAnim.Animator(KOUDAIOH_SPRITE, { wings: KOUDAIOH_WINGS, fly: 'flap' | 'glide' })
+// 羽付き版: new KoudaiohAnim.Animator(KOUDAIOH_SPRITE, { wings: KOUDAIOH_WINGS, wingsOn: true, fly: 'flap' | 'glide' })
+// 羽のデータを渡すと、羽なしの姿 (wingsOn: false) でもキャンバスは羽が収まる大きさ (320x256) になる
 anim.setState('auto');   // 持続状態: idle / can_dead / auto / no_link
 anim.fire();             // 単発。椅子に乗っていて、他の動作中でなければ true
 anim.exit('left');       // 乗っているときだけ
 anim.enter('right');     // 不在のときだけ
 anim.command('enter', 'left');   // 文字列でも同じ
+anim.setWings(true);             // 羽のデータがあるとき: 光に包まれて羽が生える (false で消える)
+anim.setFly('glide');            // 羽付きの飛び方
 const raster = anim.step();      // 1 コマ描いて進める。raster.data は 192x256（羽付き版は 320x256）の RGBA
 ```
 
@@ -164,6 +171,23 @@ const raster = anim.step();      // 1 コマ描いて進める。raster.data は
 | ① 平時 ![](docs/preview/glide_idle.gif) | ② CAN 通信死 ![](docs/preview/glide_can_dead.gif) |
 | ③ 自動運転 ![](docs/preview/glide_auto.gif) | ④ 発射 ![](docs/preview/glide_fire.gif) |
 | ⑤ 通信切断 ![](docs/preview/glide_no_link.gif) | 登場・退場 ![](docs/preview/glide_enter_exit.gif) |
+
+### 変身（羽を生やす / 消す）
+
+`W` キー、羽ボタン、`wings on/off` コマンドで、羽なし ⇔ 羽付きをその場で切り替える。9 コマ（1.8 秒）。
+
+| コマ | 光 | 姿 |
+|---|---|---|
+| 0〜2 | 胸の中心から光の円が広がる（白い芯、金の縁、水色の輪） | 元の姿 |
+| 3〜4 | 画面全体を丸く覆う | 3 コマ目で入れ替わる（座る ⇔ 浮く の位置の変化も光の下で済ませる） |
+| 5〜6 | 網目に間引かれて薄れる（半分 → 4 分の 1） | 新しい姿が透けて見えてくる |
+| 7〜8 | きらめきだけ残る | 新しい姿 |
+
+変身中は他の動作（発射・登場・退場）を受け付けない。椅子にいないときは演出なしで即座に切り替わる。
+
+| 羽ばたき | 滑空 |
+|---|---|
+| ![](docs/preview/wings_transform.gif) | ![](docs/preview/glide_transform.gif) |
 
 ## ファイル
 
